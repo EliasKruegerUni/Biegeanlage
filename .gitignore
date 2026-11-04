@@ -1,0 +1,47 @@
+### TwinCAT3 ###
+*.plcproj.bak
+*.plcproj.orig
+*.tpy
+*.tclrs
+*.library
+*.compiled-library
+*.compileinfo
+*.asm
+*.core
+LineIDs.dbg
+LineIDs.dbg.bak
+*.tmc
+*.tmcRefac
+*.tsproj.bak
+*.tsproj.b?k
+*.tsproj.orig
+*.tspproj.bak
+*.xti.bak
+*.xti.bk?
+*.xti.orig
+*.xtv
+*.xtv.bak
+*.xtv.bk?
+*.xt?.bk?
+*.xt?.orig
+**/.TcGit/
+**/_Boot/
+**/_CompileInfo/
+**/_Libraries/
+**/_ModuleInstall/
+**/_Deployment/
+**/_Repository/
+**/.vs/
+*.~u
+*.project.~u
+*.suo
+*.vsm
+
+### Python ###
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+
+### Messdaten ###
+data/raw/
