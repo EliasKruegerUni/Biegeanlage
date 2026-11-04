@@ -1,5 +1,5 @@
 # Entwicklungsumgebung
-- TwinCAT: 4026
+- TwinCAT: 4026.27
 - Installierte Workloads:
 TcPkg 2.6.24
 
