@@ -1,0 +1,28 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<TcPlcObject Version="1.1.0.1">
+  <DUT Name="ST_HmiStatus" Id="{93f69c0d-5bf3-4ee9-9997-15295147816b}">
+    <Declaration><![CDATA[// SPS -> GUI. Die SPS schreibt hier, die GUI liest nur.
+{attribute 'pack_mode' := '1'}
+TYPE ST_HmiStatus :
+STRUCT
+    nLifeCounter : UDINT; // pro SPS-Zyklus +1
+    bHmiAlive : BOOL;
+    bSimulation : BOOL;
+    bEStopActive : BOOL;
+    bSafetyOk : BOOL;
+    eMode : E_OperatingMode;
+    nStepG2 : INT; // GRAFCET-Schritt
+    nStepG3 : INT;
+    nBend : UDINT; // aktueller Bogen
+    dwBaseStateMissing : DWORD; // Bitmaske, siehe Doku
+    stCmdAck : ST_HmiCmdAck;
+    aAxis : ARRAY[1..5] OF ST_HmiAxisStatus; // Index = E_Axis
+    aClamp : ARRAY[1..6] OF ST_HmiClampStatus;
+    stIo : ST_HmiIoStatus;
+    stKin : ST_KinStatus;
+    stParamActive : ST_HmiParam;
+END_STRUCT
+END_TYPE
+]]></Declaration>
+  </DUT>
+</TcPlcObject>

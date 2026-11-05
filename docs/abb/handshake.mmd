@@ -1,0 +1,13 @@
+sequenceDiagram
+  participant G as Backend
+  participant S as SPS
+  G->>S: eCmd und Parameter schreiben
+  G->>S: nCmdId := n + 1
+  S->>S: neue nCmdId erkennen, einmal prüfen
+  alt zulässig
+    S-->>G: nAckId := n + 1, eResult := Accepted
+    S-->>G: Fortschritt über stStatus
+  else nicht zulässig
+    S-->>G: nAckId := n + 1, eResult := Rejected…, nDetail
+  end
+  Note over G,S: Kein Ack nach 1 s: Fehler anzeigen, nicht automatisch wiederholen

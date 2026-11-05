@@ -1,0 +1,141 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<TcPlcObject Version="1.1.0.1">
+  <POU Name="FB_BendKinematics" Id="{abaf62ff-19ca-4c7e-8ad1-e8abb9e1d4d0}" SpecialFunc="None">
+    <Declaration><![CDATA[// Rumpf ohne Achsbewegung. Bildet nur die Zustände aus docs/kinematik.md ab.
+FUNCTION_BLOCK FB_BendKinematics IMPLEMENTS I_Kinematics
+VAR
+    stStatus : ST_KinStatus := (eMode := E_MotionMode.Single);
+END_VAR
+]]></Declaration>
+    <Implementation>
+      <ST><![CDATA[]]></ST>
+    </Implementation>
+    <Method Name="Cyclic" Id="{81041cf1-360e-4cd1-bdbd-ba78d354ca8e}">
+      <Declaration><![CDATA[METHOD Cyclic
+// Einmal pro SPS-Zyklus aufrufen.
+VAR_INPUT
+END_VAR
+]]></Declaration>
+      <Implementation>
+        <ST><![CDATA[// TODO Phase 8: NC-Camming hier kapseln. Ablaufcode nutzt nur I_Kinematics.
+CASE stStatus.eState OF
+    E_KinState.Coupling:
+        stStatus.eState := E_KinState.Running;
+    E_KinState.Holding:
+        stStatus.eState := E_KinState.Held;
+    E_KinState.Decoupling:
+        stStatus.eState := E_KinState.Loaded;
+END_CASE
+
+CASE stStatus.eState OF
+    E_KinState.Coupling, E_KinState.Running:
+        stStatus.eMode := E_MotionMode.Coupled;
+    E_KinState.Holding, E_KinState.Held:
+        stStatus.eMode := E_MotionMode.Hold;
+ELSE
+    stStatus.eMode := E_MotionMode.Single;
+END_CASE]]></ST>
+      </Implementation>
+    </Method>
+    <Method Name="LoadPlan" Id="{526169f2-9672-4661-a8c6-ce8e7d3f266a}">
+      <Declaration><![CDATA[METHOD LoadPlan : BOOL
+// TRUE, wenn der Plan angenommen wurde. Nur im Modus Single.
+VAR_INPUT
+    nPlanId : UDINT;
+END_VAR
+]]></Declaration>
+      <Implementation>
+        <ST><![CDATA[IF stStatus.eState = E_KinState.Idle OR stStatus.eState = E_KinState.Loaded THEN
+    // TODO Phase 8: Biegeplan prüfen und Kurvenscheiben laden.
+    stStatus.nPlanId := nPlanId;
+    stStatus.eState := E_KinState.Loaded;
+    LoadPlan := TRUE;
+END_IF]]></ST>
+      </Implementation>
+    </Method>
+    <Method Name="Start" Id="{acc7d7d6-fda4-47a8-9c3f-c2470f83622d}">
+      <Declaration><![CDATA[METHOD Start : BOOL
+// Koppelt die Slaves an der aktuellen Masterposition und startet den Master.
+VAR_INPUT
+END_VAR
+]]></Declaration>
+      <Implementation>
+        <ST><![CDATA[IF stStatus.eState = E_KinState.Loaded THEN
+    stStatus.eState := E_KinState.Coupling;
+    Start := TRUE;
+END_IF]]></ST>
+      </Implementation>
+    </Method>
+    <Method Name="Hold" Id="{ed53b291-0b6a-4d23-861a-474ac0e64334}">
+      <Declaration><![CDATA[METHOD Hold : BOOL
+// Bremst den Master. Die Kopplung bleibt bestehen.
+VAR_INPUT
+END_VAR
+]]></Declaration>
+      <Implementation>
+        <ST><![CDATA[IF stStatus.eState = E_KinState.Running THEN
+    stStatus.eState := E_KinState.Holding;
+    Hold := TRUE;
+END_IF]]></ST>
+      </Implementation>
+    </Method>
+    <Method Name="Resume" Id="{8dd63b80-1077-4b5d-855c-ed18f8505211}">
+      <Declaration><![CDATA[METHOD Resume : BOOL
+// Setzt den Master aus dem Halt fort.
+VAR_INPUT
+END_VAR
+]]></Declaration>
+      <Implementation>
+        <ST><![CDATA[IF stStatus.eState = E_KinState.Held THEN
+    // TODO Phase 8: Abweichung der Slaves vom Plan prüfen.
+    stStatus.eState := E_KinState.Running;
+    Resume := TRUE;
+END_IF]]></ST>
+      </Implementation>
+    </Method>
+    <Method Name="Abort" Id="{c8be0c35-5607-4d55-9ba8-ed90b066495d}">
+      <Declaration><![CDATA[METHOD Abort : BOOL
+// Stoppt den Master und löst die Kopplung.
+VAR_INPUT
+END_VAR
+]]></Declaration>
+      <Implementation>
+        <ST><![CDATA[CASE stStatus.eState OF
+    E_KinState.Coupling, E_KinState.Running, E_KinState.Holding, E_KinState.Held:
+        stStatus.eState := E_KinState.Decoupling;
+        Abort := TRUE;
+END_CASE]]></ST>
+      </Implementation>
+    </Method>
+    <Method Name="Reset" Id="{6f4d7ced-747b-48d7-8a5c-aa25bbc1f8d9}">
+      <Declaration><![CDATA[METHOD Reset : BOOL
+// Quittiert einen Fehler der Kinematik.
+VAR_INPUT
+END_VAR
+]]></Declaration>
+      <Implementation>
+        <ST><![CDATA[IF stStatus.eState = E_KinState.Fault THEN
+    stStatus.bError := FALSE;
+    stStatus.nErrorId := 0;
+    // Der Plan bleibt erhalten, damit der Ablauf am unterbrochenen Schritt fortsetzen kann (S2).
+    IF stStatus.nPlanId <> 0 THEN
+        stStatus.eState := E_KinState.Loaded;
+    ELSE
+        stStatus.eState := E_KinState.Idle;
+    END_IF
+    Reset := TRUE;
+END_IF]]></ST>
+      </Implementation>
+    </Method>
+    <Method Name="GetStatus" Id="{ffb39e2c-2bab-4677-8780-9c0937cd351a}">
+      <Declaration><![CDATA[METHOD GetStatus : ST_KinStatus
+// Aktueller Status.
+VAR_INPUT
+END_VAR
+]]></Declaration>
+      <Implementation>
+        <ST><![CDATA[GetStatus := stStatus;]]></ST>
+      </Implementation>
+    </Method>
+  </POU>
+</TcPlcObject>

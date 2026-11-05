@@ -21,15 +21,99 @@
     <Compile Include="PlcTask.TcTTO">
       <SubType>Code</SubType>
     </Compile>
+    <Compile Include="00_GVL\GVL_Config.TcGVL">
+      <SubType>Code</SubType>
+    </Compile>
+    <Compile Include="00_GVL\GVL_HMI.TcGVL">
+      <SubType>Code</SubType>
+    </Compile>
+    <Compile Include="01_DUT\E_AlarmCode.TcDUT">
+      <SubType>Code</SubType>
+    </Compile>
+    <Compile Include="01_DUT\E_AlarmSeverity.TcDUT">
+      <SubType>Code</SubType>
+    </Compile>
+    <Compile Include="01_DUT\E_Axis.TcDUT">
+      <SubType>Code</SubType>
+    </Compile>
+    <Compile Include="01_DUT\E_AxisState.TcDUT">
+      <SubType>Code</SubType>
+    </Compile>
+    <Compile Include="01_DUT\E_ClampState.TcDUT">
+      <SubType>Code</SubType>
+    </Compile>
+    <Compile Include="01_DUT\E_CmdResult.TcDUT">
+      <SubType>Code</SubType>
+    </Compile>
+    <Compile Include="01_DUT\E_HmiCmd.TcDUT">
+      <SubType>Code</SubType>
+    </Compile>
+    <Compile Include="01_DUT\E_KinState.TcDUT">
+      <SubType>Code</SubType>
+    </Compile>
+    <Compile Include="01_DUT\E_MotionMode.TcDUT">
+      <SubType>Code</SubType>
+    </Compile>
+    <Compile Include="01_DUT\E_OperatingMode.TcDUT">
+      <SubType>Code</SubType>
+    </Compile>
+    <Compile Include="01_DUT\ST_AlarmEntry.TcDUT">
+      <SubType>Code</SubType>
+    </Compile>
+    <Compile Include="01_DUT\ST_HmiAlarms.TcDUT">
+      <SubType>Code</SubType>
+    </Compile>
+    <Compile Include="01_DUT\ST_HmiAxisStatus.TcDUT">
+      <SubType>Code</SubType>
+    </Compile>
+    <Compile Include="01_DUT\ST_HmiClampStatus.TcDUT">
+      <SubType>Code</SubType>
+    </Compile>
+    <Compile Include="01_DUT\ST_HmiCmd.TcDUT">
+      <SubType>Code</SubType>
+    </Compile>
+    <Compile Include="01_DUT\ST_HmiCmdAck.TcDUT">
+      <SubType>Code</SubType>
+    </Compile>
+    <Compile Include="01_DUT\ST_HmiIoStatus.TcDUT">
+      <SubType>Code</SubType>
+    </Compile>
+    <Compile Include="01_DUT\ST_HmiJog.TcDUT">
+      <SubType>Code</SubType>
+    </Compile>
+    <Compile Include="01_DUT\ST_HmiParam.TcDUT">
+      <SubType>Code</SubType>
+    </Compile>
+    <Compile Include="01_DUT\ST_HmiStatus.TcDUT">
+      <SubType>Code</SubType>
+    </Compile>
+    <Compile Include="01_DUT\ST_KinStatus.TcDUT">
+      <SubType>Code</SubType>
+    </Compile>
+    <Compile Include="01_DUT\ST_Material.TcDUT">
+      <SubType>Code</SubType>
+    </Compile>
+    <Compile Include="04_Kinematics\FB_BendKinematics.TcPOU">
+      <SubType>Code</SubType>
+    </Compile>
+    <Compile Include="04_Kinematics\I_Kinematics.TcIO">
+      <SubType>Code</SubType>
+    </Compile>
     <Compile Include="POUs\MAIN.TcPOU">
       <SubType>Code</SubType>
     </Compile>
   </ItemGroup>
   <ItemGroup>
-    <Folder Include="DUTs" />
-    <Folder Include="GVLs" />
-    <Folder Include="VISUs" />
+    <Folder Include="00_GVL" />
+    <Folder Include="01_DUT" />
+    <Folder Include="02_IO" />
+    <Folder Include="03_Devices" />
+    <Folder Include="04_Kinematics" />
+    <Folder Include="05_Sequence" />
+    <Folder Include="06_HMI" />
+    <Folder Include="07_Test" />
     <Folder Include="POUs" />
+    <Folder Include="VISUs" />
   </ItemGroup>
   <ItemGroup>
     <PlaceholderReference Include="Tc2_Standard">

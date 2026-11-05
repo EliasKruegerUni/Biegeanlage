@@ -1,0 +1,17 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<TcPlcObject Version="1.1.0.1">
+  <DUT Name="E_MotionMode" Id="{1a306ce2-9f4a-4d58-afb7-fb492f5fca05}">
+    <Declaration><![CDATA[// Bewegungsmodus der Kinematik.
+{attribute 'qualified_only'}
+{attribute 'strict'}
+{attribute 'to_string'}
+TYPE E_MotionMode :
+(
+    Single := 1, // entkoppelt, Einzelachsen erlaubt
+    Coupled := 2, // gekoppelt, Master läuft oder fährt an
+    Hold := 3 // gekoppelt, Master hält
+) INT;
+END_TYPE
+]]></Declaration>
+  </DUT>
+</TcPlcObject>

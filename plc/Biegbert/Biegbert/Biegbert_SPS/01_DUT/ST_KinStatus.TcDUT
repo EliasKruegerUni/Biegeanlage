@@ -1,0 +1,18 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<TcPlcObject Version="1.1.0.1">
+  <DUT Name="ST_KinStatus" Id="{8b2fce6d-f5dc-4f05-a167-23208c00f1ff}">
+    <Declaration><![CDATA[// Status von I_Kinematics.
+{attribute 'pack_mode' := '1'}
+TYPE ST_KinStatus :
+STRUCT
+    eState : E_KinState;
+    eMode : E_MotionMode;
+    nPlanId : UDINT;
+    bError : BOOL;
+    nErrorId : UDINT;
+    fMasterPos_mm : LREAL;
+END_STRUCT
+END_TYPE
+]]></Declaration>
+  </DUT>
+</TcPlcObject>

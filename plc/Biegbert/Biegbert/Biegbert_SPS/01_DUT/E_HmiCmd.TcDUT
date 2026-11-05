@@ -1,0 +1,39 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<TcPlcObject Version="1.1.0.1">
+  <DUT Name="E_HmiCmd" Id="{e35fd989-b021-4ac8-8c31-76236de8809a}">
+    <Declaration><![CDATA[// Kommandos der GUI. Details: docs/hmi-schnittstelle.md
+{attribute 'qualified_only'}
+{attribute 'strict'}
+{attribute 'to_string'}
+TYPE E_HmiCmd :
+(
+    None := 0,
+    AlarmAck := 10, // nValue = Alarm-Slot, 0 = alle
+    ParamApply := 11, // stParam prüfen und übernehmen
+    AxisEnable := 100, // Phase 4/6: eAxis
+    AxisDisable := 101, // Phase 6: eAxis
+    AxisReset := 102, // Phase 6: eAxis
+    AxisHalt := 103, // Phase 4/6: eAxis
+    AxisMoveAbs := 104, // Phase 6: eAxis, fPosition, fVelocity
+    ClampOpen := 120, // Phase 6: nClamp
+    ClampClose := 121, // Phase 6: nClamp
+    ModePause := 200, // Phase 6
+    ModeResume1 := 201, // Phase 6: RES1
+    ModeResume2 := 202, // Phase 6: RES2
+    ModeSingleAxis1 := 203, // Phase 6: MAN1
+    ModeSingleAxis2 := 204, // Phase 6: MAN2
+    ModeReturnToBase := 205, // Phase 6: OK, nur bei GZ_POS
+    SimSetInput := 300, // Phase 5/6: nur im Simulationsbetrieb, nValue = Signal-ID, fPosition <> 0 = TRUE
+    SimInjectFault := 301, // Phase 5: nur im Simulationsbetrieb, nValue = Fehler-ID
+    SeqStart := 400, // reserviert Phase 8: ST
+    SeqConfirmQ1 := 401, // reserviert Phase 8
+    SeqConfirmQ2 := 402, // reserviert Phase 8
+    SeqPartRemoved := 403, // reserviert Phase 8: ENT
+    PlanLoad := 410, // reserviert Phase 9
+    MaterialConfirm := 411, // reserviert Phase 9
+    CalibrateAxis := 500 // reserviert Phase 9: Einmessen
+) UDINT;
+END_TYPE
+]]></Declaration>
+  </DUT>
+</TcPlcObject>

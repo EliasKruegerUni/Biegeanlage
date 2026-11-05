@@ -1,0 +1,16 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<TcPlcObject Version="1.1.0.1">
+  <DUT Name="ST_Material" Id="{1946f580-3cae-445c-9069-80ba1f71f6fa}">
+    <Declaration><![CDATA[// Halbzeugdaten des aktiven Programms.
+{attribute 'pack_mode' := '1'}
+TYPE ST_Material :
+STRUCT
+    fDiameter_mm : LREAL;
+    fWall_mm : LREAL; // 0 = Vollmaterial
+    fYield_MPa : LREAL; // Rp0,2
+    fForceLimit_N : LREAL;
+END_STRUCT
+END_TYPE
+]]></Declaration>
+  </DUT>
+</TcPlcObject>

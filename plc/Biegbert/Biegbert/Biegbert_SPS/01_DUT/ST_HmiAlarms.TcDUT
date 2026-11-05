@@ -1,0 +1,17 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<TcPlcObject Version="1.1.0.1">
+  <DUT Name="ST_HmiAlarms" Id="{315d6abf-5d8e-4ddf-9b87-8ed9438197f0}">
+    <Declaration><![CDATA[// SPS -> GUI. Aktive oder nicht quittierte Alarme.
+{attribute 'pack_mode' := '1'}
+TYPE ST_HmiAlarms :
+STRUCT
+    nChangeCounter : UDINT; // bei jeder Änderung +1
+    nCount : UINT;
+    bOverflow : BOOL;
+    eHighestSeverity : E_AlarmSeverity;
+    aEntry : ARRAY[1..32] OF ST_AlarmEntry;
+END_STRUCT
+END_TYPE
+]]></Declaration>
+  </DUT>
+</TcPlcObject>

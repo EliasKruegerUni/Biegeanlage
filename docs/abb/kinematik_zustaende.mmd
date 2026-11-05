@@ -1,0 +1,20 @@
+stateDiagram-v2
+  direction TB
+  [*] --> Idle
+  Idle --> Loaded: LoadPlan
+  Loaded --> Aktiv: Start
+  state Aktiv {
+    [*] --> Coupling
+    Coupling --> Running: gekoppelt
+    Running --> Holding: Hold
+    Holding --> Held: Stillstand
+    Held --> Running: Resume
+    Coupling --> Decoupling: Abort
+    Running --> Decoupling: Abort oder Planende
+    Holding --> Decoupling: Abort
+    Held --> Decoupling: Abort
+  }
+  Aktiv --> Loaded: entkoppelt
+  Aktiv --> Fault: Fehler
+  Fault --> Loaded: Reset, Plan vorhanden
+  Fault --> Idle: Reset, kein Plan

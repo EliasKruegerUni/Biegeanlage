@@ -1,0 +1,21 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<TcPlcObject Version="1.1.0.1">
+  <DUT Name="ST_HmiCmd" Id="{233308a8-c720-4ded-8418-4a04f387583b}">
+    <Declaration><![CDATA[// GUI -> SPS. Die GUI schreibt hier, die SPS liest nur.
+{attribute 'pack_mode' := '1'}
+TYPE ST_HmiCmd :
+STRUCT
+    nHeartbeat : UDINT; // alle 100 ms hochzählen
+    nCmdId : UDINT; // zuletzt und getrennt schreiben
+    eCmd : E_HmiCmd;
+    eAxis : E_Axis;
+    nClamp : USINT; // 1..6, 0 = keiner
+    fPosition : LREAL; // mm oder °, je nach Achse
+    fVelocity : LREAL; // mm/s oder °/s
+    nValue : DINT; // kommandoabhängig
+    stJog : ST_HmiJog;
+END_STRUCT
+END_TYPE
+]]></Declaration>
+  </DUT>
+</TcPlcObject>

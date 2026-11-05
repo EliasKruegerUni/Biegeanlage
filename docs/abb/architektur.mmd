@@ -1,0 +1,32 @@
+flowchart TB
+  subgraph PC["Windows-Teil des Anlagen-PCs (keine Echtzeit)"]
+    B["Browser: HTML/JS"]
+    P["Python-Backend: FastAPI, pyads"]
+    M["Python-Prozessmodell"]
+  end
+  subgraph RT["TwinCAT-Echtzeit"]
+    S4["06_HMI: Schnittstelle GVL_HMI, Kommandoprüfung"]
+    S3["05_Sequence: Abläufe G0 bis G3"]
+    K["04_Kinematics: I_Kinematics, FB_BendKinematics"]
+    D["03_Devices: Gerätelogik"]
+    IO["02_IO: zentrale E/A-Schicht"]
+    NC["TwinCAT NC: Achsen, Kopplung"]
+  end
+  HW["Reale Anlage: AX8000, Klemmen, EP-Boxen"]
+  SIM["Simulation: NC-Simulationsachsen, E/A-Modelle"]
+  SAFE["TwinSAFE: Not-Halt, STO, Entlüftung"]
+  B <-- "WebSocket" --> P
+  M --- P
+  P <-- "ADS, nur GVL_HMI" --> S4
+  S4 --> S3
+  S3 --> K
+  S3 --> D
+  K --> NC
+  D --> NC
+  D --> IO
+  NC <-- "simuliert" --> SIM
+  IO <-- "simuliert" --> SIM
+  NC <-- "real" --> HW
+  IO <-- "real" --> HW
+  SAFE -- "Diagnose" --> IO
+  HW -- "sichere Signale" --- SAFE

@@ -1,0 +1,31 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<TcPlcObject Version="1.1.0.1">
+  <DUT Name="E_AlarmCode" Id="{8a1e6f91-0951-4549-a823-213cb38eb51c}">
+    <Declaration><![CDATA[// Alarmcodes. Die Texte liegen im Backend.
+{attribute 'qualified_only'}
+{attribute 'strict'}
+{attribute 'to_string'}
+TYPE E_AlarmCode :
+(
+    None := 0,
+    HmiHeartbeatLost := 1001, // Heartbeat ausgefallen
+    SimulationActive := 1002, // Simulationsbetrieb aktiv
+    EStopActive := 1100, // Not-Halt ausgelöst
+    SafetyNotReady := 1101, // TwinSAFE nicht betriebsbereit
+    AxisError := 2000, // nSource = E_Axis, nDetail = NC-Fehlercode
+    AxisLagError := 2001, // Schleppfehler
+    AxisSoftLimit := 2002, // Software-Endlage
+    AxisTorqueLimit := 2003, // Momentgrenze
+    ClampTimeout := 3000, // nSource = Niederhalter
+    ClampPressureLow := 3001, // Klemmdruck fehlt
+    ClampZoneViolation := 3002, // 4BF-Zone bei geschlossenem Niederhalter
+    DistanceZ1Z2 := 4000, // dZ12 unterschritten
+    KinCoupleFailed := 5000, // Kopplung fehlgeschlagen
+    KinMasterFault := 5001, // Master Z1 gestört
+    KinSlaveFault := 5002, // Slave gestört
+    KinPositionDeviation := 5003 // Achse weicht vor Wiederanlauf vom Plan ab
+) UDINT;
+END_TYPE
+]]></Declaration>
+  </DUT>
+</TcPlcObject>

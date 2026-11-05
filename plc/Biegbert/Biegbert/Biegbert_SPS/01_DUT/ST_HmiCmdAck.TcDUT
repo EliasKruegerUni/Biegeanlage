@@ -1,0 +1,15 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<TcPlcObject Version="1.1.0.1">
+  <DUT Name="ST_HmiCmdAck" Id="{012e4e3f-a801-487e-9900-011f20c187c3}">
+    <Declaration><![CDATA[// SPS -> GUI. Antwort auf das letzte Kommando.
+{attribute 'pack_mode' := '1'}
+TYPE ST_HmiCmdAck :
+STRUCT
+    nAckId : UDINT; // gleich nCmdId, sobald geprüft
+    eResult : E_CmdResult;
+    nDetail : UDINT; // z. B. fehlende Bedingung
+END_STRUCT
+END_TYPE
+]]></Declaration>
+  </DUT>
+</TcPlcObject>

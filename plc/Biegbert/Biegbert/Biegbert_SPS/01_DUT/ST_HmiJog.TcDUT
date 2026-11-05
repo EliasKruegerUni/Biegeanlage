@@ -1,0 +1,15 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<TcPlcObject Version="1.1.0.1">
+  <DUT Name="ST_HmiJog" Id="{db4b4019-d184-4f29-8669-d2723a604f08}">
+    <Declaration><![CDATA[// Tippen. Wird zyklisch ausgewertet und läuft nicht über den Handshake.
+{attribute 'pack_mode' := '1'}
+TYPE ST_HmiJog :
+STRUCT
+    eAxis : E_Axis;
+    nDirection : SINT; // -1, 0, +1
+    fVelocityFactor_pct : LREAL; // 0..100 der Einrichtgeschwindigkeit
+END_STRUCT
+END_TYPE
+]]></Declaration>
+  </DUT>
+</TcPlcObject>

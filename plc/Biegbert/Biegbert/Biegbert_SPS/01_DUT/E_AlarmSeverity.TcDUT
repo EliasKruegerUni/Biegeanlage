@@ -1,0 +1,19 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<TcPlcObject Version="1.1.0.1">
+  <DUT Name="E_AlarmSeverity" Id="{2e432cd4-4edb-4a59-89e3-2949b3995201}">
+    <Declaration><![CDATA[// Abgestufte Reaktion nach SE3.
+{attribute 'qualified_only'}
+{attribute 'strict'}
+{attribute 'to_string'}
+TYPE E_AlarmSeverity :
+(
+    None := 0,
+    Info := 1, // nur Anzeige
+    Warning := 2, // Anzeige, Ablauf läuft weiter
+    Stop := 3, // Pause
+    Fault := 4 // Pause, Wiederanlauf erst nach Behebung
+) INT;
+END_TYPE
+]]></Declaration>
+  </DUT>
+</TcPlcObject>

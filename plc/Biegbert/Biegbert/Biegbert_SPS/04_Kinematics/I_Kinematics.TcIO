@@ -1,0 +1,65 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<TcPlcObject Version="1.1.0.1">
+  <Itf Name="I_Kinematics" Id="{c5693eee-b791-4378-8103-14055035bf96}">
+    <Declaration><![CDATA[// Einzige Schnittstelle des Ablaufs zur Achskopplung. Details: docs/kinematik.md
+INTERFACE I_Kinematics
+]]></Declaration>
+    <Method Name="Cyclic" Id="{543df196-94a7-4eac-8d9c-351899186b58}">
+      <Declaration><![CDATA[METHOD Cyclic
+// Einmal pro SPS-Zyklus aufrufen.
+VAR_INPUT
+END_VAR
+]]></Declaration>
+    </Method>
+    <Method Name="LoadPlan" Id="{acaff851-9f80-45c6-92da-2bbe68bb6bca}">
+      <Declaration><![CDATA[METHOD LoadPlan : BOOL
+// TRUE, wenn der Plan angenommen wurde. Nur im Modus Single.
+VAR_INPUT
+    nPlanId : UDINT;
+END_VAR
+]]></Declaration>
+    </Method>
+    <Method Name="Start" Id="{f446ab69-f4e0-49cb-9e39-a4fb6224f1ea}">
+      <Declaration><![CDATA[METHOD Start : BOOL
+// Koppelt die Slaves an der aktuellen Masterposition und startet den Master.
+VAR_INPUT
+END_VAR
+]]></Declaration>
+    </Method>
+    <Method Name="Hold" Id="{741b9eec-8c30-4769-bfa3-1572eb2525b6}">
+      <Declaration><![CDATA[METHOD Hold : BOOL
+// Bremst den Master. Die Kopplung bleibt bestehen.
+VAR_INPUT
+END_VAR
+]]></Declaration>
+    </Method>
+    <Method Name="Resume" Id="{47a33e7f-d1a9-42f2-9dfd-419cfc490243}">
+      <Declaration><![CDATA[METHOD Resume : BOOL
+// Setzt den Master aus dem Halt fort.
+VAR_INPUT
+END_VAR
+]]></Declaration>
+    </Method>
+    <Method Name="Abort" Id="{139f377e-9ff4-4892-8121-730c9f7e26fb}">
+      <Declaration><![CDATA[METHOD Abort : BOOL
+// Stoppt den Master und löst die Kopplung.
+VAR_INPUT
+END_VAR
+]]></Declaration>
+    </Method>
+    <Method Name="Reset" Id="{dd530390-0355-484f-a7a2-894bd120fa23}">
+      <Declaration><![CDATA[METHOD Reset : BOOL
+// Quittiert einen Fehler der Kinematik.
+VAR_INPUT
+END_VAR
+]]></Declaration>
+    </Method>
+    <Method Name="GetStatus" Id="{40b54727-0c93-48d9-8a43-537c4322e8cb}">
+      <Declaration><![CDATA[METHOD GetStatus : ST_KinStatus
+// Aktueller Status.
+VAR_INPUT
+END_VAR
+]]></Declaration>
+    </Method>
+  </Itf>
+</TcPlcObject>

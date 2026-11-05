@@ -1,0 +1,15 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<TcPlcObject Version="1.1.0.1">
+  <GVL Name="GVL_Config" Id="{35d1990a-8d83-482a-9840-8d39c2209e5b}">
+    <Declaration><![CDATA[// Feste Konfigurationswerte. Startwerte, in Phase 4 prüfen.
+{attribute 'qualified_only'}
+VAR_GLOBAL CONSTANT
+    cAxisCount           : INT  := 5;
+    cClampCount          : INT  := 6;
+    cAlarmSlots          : INT  := 32;
+    tHeartbeatTimeout    : TIME := T#500MS;
+    tTwoStepConfirmation : TIME := T#10S;
+END_VAR
+]]></Declaration>
+  </GVL>
+</TcPlcObject>

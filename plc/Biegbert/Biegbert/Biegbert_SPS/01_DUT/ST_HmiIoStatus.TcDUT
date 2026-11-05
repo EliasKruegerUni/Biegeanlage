@@ -1,0 +1,15 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<TcPlcObject Version="1.1.0.1">
+  <DUT Name="ST_HmiIoStatus" Id="{6c1868f0-d431-472d-b951-cfa7f6ec15bd}">
+    <Declaration><![CDATA[// SPS -> GUI. E/A-Übersicht ohne Niederhalter. Belegung folgt mit der EMSR-Liste.
+{attribute 'pack_mode' := '1'}
+TYPE ST_HmiIoStatus :
+STRUCT
+    bPressureOk : BOOL; // Druckschalter SDE5
+    abPanelIn : ARRAY[1..16] OF BOOL; // ED1809
+    abPanelOut : ARRAY[1..16] OF BOOL; // ED2809
+END_STRUCT
+END_TYPE
+]]></Declaration>
+  </DUT>
+</TcPlcObject>

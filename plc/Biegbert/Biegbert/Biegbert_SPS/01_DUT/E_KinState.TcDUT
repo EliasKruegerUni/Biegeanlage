@@ -1,0 +1,22 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<TcPlcObject Version="1.1.0.1">
+  <DUT Name="E_KinState" Id="{5fbd48da-8157-4056-9496-0b4de48e224b}">
+    <Declaration><![CDATA[// Zustand der Kinematik.
+{attribute 'qualified_only'}
+{attribute 'strict'}
+{attribute 'to_string'}
+TYPE E_KinState :
+(
+    Idle := 0, // kein Plan aktiv
+    Loaded := 1, // Plan geladen, entkoppelt
+    Coupling := 2,
+    Running := 3, // gekoppelt, Master läuft
+    Holding := 4, // Master bremst
+    Held := 5, // gekoppelt, Stillstand
+    Decoupling := 6,
+    Fault := 7 // Reset nötig
+) INT;
+END_TYPE
+]]></Declaration>
+  </DUT>
+</TcPlcObject>

@@ -1,13 +1,16 @@
-<?xml version="1.0" encoding="utf-8"?>
+﻿<?xml version="1.0" encoding="utf-8"?>
 <TcPlcObject Version="1.1.0.1">
   <POU Name="MAIN" Id="{3c8b17dd-a8bc-4093-9d78-6da4f5104d49}">
     <Declaration><![CDATA[PROGRAM MAIN
 VAR
+    fbKinematics : FB_BendKinematics;
 END_VAR
 ]]>
     </Declaration>
     <Implementation>
-      <ST><![CDATA[]]></ST>
+      <ST><![CDATA[fbKinematics.Cyclic();
+GVL_HMI.stStatus.nLifeCounter := GVL_HMI.stStatus.nLifeCounter + 1;
+GVL_HMI.stStatus.stKin := fbKinematics.GetStatus();]]></ST>
     </Implementation>
   </POU>
 </TcPlcObject>

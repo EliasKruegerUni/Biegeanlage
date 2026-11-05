@@ -1,0 +1,16 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<TcPlcObject Version="1.1.0.1">
+  <DUT Name="ST_HmiClampStatus" Id="{46c853e3-1ef2-4445-b91d-047126fb6a74}">
+    <Declaration><![CDATA[// SPS -> GUI. Status eines Niederhalters.
+{attribute 'pack_mode' := '1'}
+TYPE ST_HmiClampStatus :
+STRUCT
+    eState : E_ClampState;
+    bValve : BOOL; // Ausgang
+    bOpen : BOOL; // Endlage OFFEN
+    fLastSwitchTime_ms : LREAL;
+END_STRUCT
+END_TYPE
+]]></Declaration>
+  </DUT>
+</TcPlcObject>

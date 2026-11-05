@@ -1,0 +1,19 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<TcPlcObject Version="1.1.0.1">
+  <DUT Name="ST_AlarmEntry" Id="{344e7650-5394-4be7-8b41-ab84f95bf027}">
+    <Declaration><![CDATA[// Ein Alarm. Texte und Historie liegen im Backend.
+{attribute 'pack_mode' := '1'}
+TYPE ST_AlarmEntry :
+STRUCT
+    eCode : E_AlarmCode;
+    eSeverity : E_AlarmSeverity;
+    nSource : DINT; // Achse oder Niederhalter
+    nDetail : UDINT;
+    nTimestamp : ULINT; // Windows-Dateizeit, 100 ns
+    bActive : BOOL; // Ursache besteht noch
+    bAcked : BOOL;
+END_STRUCT
+END_TYPE
+]]></Declaration>
+  </DUT>
+</TcPlcObject>

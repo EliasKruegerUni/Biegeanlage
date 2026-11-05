@@ -1,0 +1,23 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<TcPlcObject Version="1.1.0.1">
+  <DUT Name="ST_HmiAxisStatus" Id="{1f5f1573-3e36-43ab-81be-5112f6c70655}">
+    <Declaration><![CDATA[// SPS -> GUI. Status einer Achse.
+{attribute 'pack_mode' := '1'}
+TYPE ST_HmiAxisStatus :
+STRUCT
+    eState : E_AxisState;
+    bEnabled : BOOL;
+    bReady : BOOL;
+    bError : BOOL;
+    nErrorId : UDINT;
+    fActPos : LREAL; // mm oder °
+    fSetPos : LREAL;
+    fActVelo : LREAL; // mm/s oder °/s
+    fSetVelo : LREAL;
+    fLagError : LREAL; // mm oder °
+    fTorque_Nm : LREAL;
+END_STRUCT
+END_TYPE
+]]></Declaration>
+  </DUT>
+</TcPlcObject>

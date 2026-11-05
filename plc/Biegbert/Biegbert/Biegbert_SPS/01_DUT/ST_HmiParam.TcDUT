@@ -1,0 +1,16 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<TcPlcObject Version="1.1.0.1">
+  <DUT Name="ST_HmiParam" Id="{3b7040a0-38d0-4604-a124-e839b9cbfb00}">
+    <Declaration><![CDATA[// GUI -> SPS mit Übernahme durch ParamApply.
+{attribute 'pack_mode' := '1'}
+TYPE ST_HmiParam :
+STRUCT
+    nPlanId : UDINT;
+    stMaterial : ST_Material;
+    fFeedOverride_pct : LREAL; // 0..100
+    fSingleAxisVelo_pct : LREAL; // 0..100
+END_STRUCT
+END_TYPE
+]]></Declaration>
+  </DUT>
+</TcPlcObject>
