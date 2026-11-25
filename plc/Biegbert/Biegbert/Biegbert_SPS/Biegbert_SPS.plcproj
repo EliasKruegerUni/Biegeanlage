@@ -16,8 +16,17 @@
     <Implicit_KindOfTask>{89d94382-8cd0-41a6-9983-033e51e57020}</Implicit_KindOfTask>
     <Implicit_Jitter_Distribution>{2f37523a-1114-457d-a816-fbe47fdfc6a9}</Implicit_Jitter_Distribution>
     <LibraryReferences>{2ae52afe-0afe-4743-b5dc-43a3a44cf3dd}</LibraryReferences>
+    <Released>false</Released>
+    <CompilerDefines>
+    </CompilerDefines>
   </PropertyGroup>
   <ItemGroup>
+    <Compile Include="07_Test\FB_BendKinematics_Test.TcPOU">
+      <SubType>Code</SubType>
+    </Compile>
+    <Compile Include="07_Test\PRG_TEST.TcPOU">
+      <SubType>Code</SubType>
+    </Compile>
     <Compile Include="PlcTask.TcTTO">
       <SubType>Code</SubType>
     </Compile>
@@ -128,6 +137,10 @@
       <DefaultResolution>Tc3_Module, * (Beckhoff Automation GmbH)</DefaultResolution>
       <Namespace>Tc3_Module</Namespace>
       <SystemLibrary>true</SystemLibrary>
+    </PlaceholderReference>
+    <PlaceholderReference Include="TcUnit">
+      <DefaultResolution>TcUnit, * (www.tcunit.org)</DefaultResolution>
+      <Namespace>TcUnit</Namespace>
     </PlaceholderReference>
   </ItemGroup>
   <ItemGroup>

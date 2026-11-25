@@ -3,6 +3,8 @@
 - Installierte Workloads:
 TcPkg 2.6.24
 
+TcUnit 1.3.1 (https://github.com/tcunit/TcUnit/releases/tag/1.3.1)
+
 Beckhoff.libusbapi 1.4.3
 net.8.0.DesktopRuntime.Beckhoff 8.0.26.35920
 netfx.4.8.1.Beckhoff 4.8.9037.7

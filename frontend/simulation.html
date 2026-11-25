@@ -1,0 +1,1183 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<title>Biegbert – Visualisierung</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<!--
+  Biegbert – 3D-Visualisierung der Freiform-Biegeanlage (three.js r128)
+
+  Dateien (gleicher Ordner):
+    three.r128.min.js       three.js-Kern (globales THREE)
+    biegbert_geometry.js    Geometrie, erzeugt aus ORIG_Biegbert_Gesamt.STEP
+
+  Koordinaten: CAD-Koordinaten der Gesamtbaugruppe in mm, +Y oben,
+  Rohrachse = Z-Achse (x = 0, y = 0), Materialfluss in +Z.
+
+  ── Schnittstelle für Python ────────────────────────────────────────────
+  JS:
+      biegbert.setAxes({Z1: 120, X: 7, A: 32.5})   // mm bzw. Grad
+      biegbert.getAxes()  ->  {Z1:…, W:…, Z2:…, X:…, A:…, NH1:…, NH2:…, NH3:…}
+      biegbert.setDetailLevel(1..4)
+      biegbert.onUserChange = (values) => {…}       // Slider von Hand bewegt
+      biegbert.test.start() / .play() / .pause() / .stop() / .close()
+      biegbert.test.setSpeed(mm_s) / .setCoupleA(bool) / .getPart() / .state()
+
+  WebSocket (JSON):
+      Adresse: ?ws=ws://host:port/pfad   (URL-Parameter)
+               sonst bei http(s): ws://<host>:8765/   bei file://: ws://localhost:8765/
+      Python -> Browser:
+          {"type":"axes","values":{"Z1":120.0,"X":7.0}}   (oder nur {"Z1":120.0,…})
+          {"type":"detail","level":3}
+          {"type":"test","cmd":"start"|"play"|"pause"|"stop"|"close"}
+          {"type":"test","cmd":"speed","value":30}        mm/s
+          {"type":"test","cmd":"coupleA","value":true}
+      Browser -> Python:
+          {"type":"hello","axes":{…Grenzen…},"values":{…}}     nach dem Verbinden
+          {"type":"manual","values":{…}}                       bei Slider-Bewegung von Hand
+          {"type":"test","event":"started"|"play"|"pause"|"limit"|"stopped"|"closed", …}
+          {"type":"part", …}                                    Biegeteil nach "Versuch stoppen"
+
+  ── Betriebsarten ──────────────────────────────────────────────────────
+  Eigenständig (Slider), Anlagenersatz (SPS simuliert steuert), digitaler Zwilling (reale Anlage).
+  Automatische Wahl nach dem Simulationsflag der SPS, umschaltbar in der Seitenleiste.
+  Die Visualisierung meldet nichts an die SPS zurück.
+  Vom Backend: {"type":"axes","values":{Z1,Z2,X,A,W,NH1..3},"set":{Z1..W},
+                "process":{simulation,plc_kind,mode,kin,plan_id,step_g2,step_g2_text}}
+
+  ── Biegemodell (ideal, nach [Eberle]) ─────────────────────────────────
+  u = X (Matrizenauslenkung), v = Abstand Führungsaustritt–Matrizenachse.
+  Zwischen Führung und Matrize liegt das Rohr auf dem Kreis R = (u²+v²)/(2|u|),
+  tangential zur Rohrachse am Führungsaustritt. Jedes Materialelement erhält die
+  Krümmung, die beim Durchlaufen der Matrize gilt, und behält sie danach (starr).
+  Drehung W dreht das Rohr um die eigene Achse; der umgeformte Teil dreht sich
+  dabei um die Rohrtangente in der Matrize (Vereinfachung, keine Torsion).
+-->
+<style>
+  :root{
+    --bg:#16181c; --panel:#1e2126; --panel2:#262a30; --line:#33383f;
+    --text:#e6e8eb; --dim:#9aa1aa; --accent:#e0a458; --ok:#5fbf77; --warn:#d9a441; --bad:#d9675a; --tube:#7fb3d9;
+    --badge:#4a3d22; --tipbg:rgba(20,22,26,.92); --partbg:#121418; --cardbg:rgba(30,33,38,.94); --rowline:#2a2e34;
+    --rowhi:rgba(224,164,88,.18); --range:#e0a458; color-scheme:dark;
+  }
+  :root[data-theme=light]{
+    --bg:#e9ecf0; --panel:#ffffff; --panel2:#f2f4f7; --line:#d3d8de;
+    --text:#1d2127; --dim:#5d6570; --accent:#e0a458; --ok:#2f8f4b; --warn:#9a640f; --bad:#c0392b;
+    --badge:#fbecd0; --tipbg:rgba(255,255,255,.96); --partbg:#f2f4f7; --cardbg:rgba(255,255,255,.95); --rowline:#e6e9ed;
+    --rowhi:rgba(224,164,88,.28); --range:#a8661f; color-scheme:light;
+  }
+  .head{display:flex;align-items:flex-start;justify-content:space-between;gap:8px}
+  #themeBtn{background:var(--panel2);color:var(--text);border:1px solid var(--line);border-radius:5px;
+    padding:3px 8px;cursor:pointer;font:inherit;font-size:12px;white-space:nowrap}
+  #themeBtn:hover{border-color:var(--accent)}
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%;background:var(--bg);color:var(--text);
+    font:13px/1.4 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;overflow:hidden}
+  #app{display:flex;height:100%}
+  #view{position:relative;flex:1;min-width:0}
+  #view canvas{display:block;width:100%;height:100%;outline:none}
+  #side{width:330px;flex:none;background:var(--panel);border-left:1px solid var(--line);
+    overflow-y:auto;padding:14px 14px 24px}
+  h1{font-size:15px;margin:0 0 2px;font-weight:600;letter-spacing:.2px}
+  .sub{color:var(--dim);font-size:11.5px;margin-bottom:12px}
+  section{border-top:1px solid var(--line);padding:12px 0 4px}
+  h2{font-size:11px;text-transform:uppercase;letter-spacing:.8px;color:var(--dim);margin:0 0 8px;font-weight:600}
+  .seg{display:flex;border:1px solid var(--line);border-radius:6px;overflow:hidden}
+  .seg button{flex:1;background:var(--panel2);color:var(--text);border:0;border-right:1px solid var(--line);
+    padding:6px 0;cursor:pointer;font:inherit}
+  .seg button:last-child{border-right:0}
+  .seg button.on{background:var(--accent);color:#1a1a1a;font-weight:600}
+  .hint{color:var(--dim);font-size:11.5px;margin-top:6px}
+  .axis{margin-bottom:12px}
+  .axis .row{display:flex;align-items:center;gap:6px;margin-bottom:3px}
+  .axis .name{flex:1;font-weight:500}
+  .axis input[type=number]{width:74px;background:var(--panel2);color:var(--text);border:1px solid var(--line);
+    border-radius:4px;padding:2px 5px;font:inherit;text-align:right}
+  .axis .unit{width:22px;color:var(--dim);font-size:12px}
+  input[type=range]{width:100%;accent-color:var(--range);margin:0}
+  .axis .lim{display:flex;justify-content:space-between;color:var(--dim);font-size:10.5px}
+  .axis .lim .dyn{color:var(--warn)}
+  .badge{font-size:10px;padding:1px 5px;border-radius:3px;background:var(--badge);color:var(--warn);cursor:help}
+  .ext{outline:1px solid var(--ok);outline-offset:1px}
+  .locked{opacity:.55}
+  .btns{display:flex;flex-wrap:wrap;gap:6px}
+  .btns button,.btn{background:var(--panel2);color:var(--text);border:1px solid var(--line);border-radius:5px;
+    padding:4px 9px;cursor:pointer;font:inherit}
+  .btns button:hover,.btn:hover{border-color:var(--accent)}
+  button:disabled{opacity:.4;cursor:default}
+  .btn.primary{background:var(--accent);color:#1a1a1a;border-color:var(--accent);font-weight:600}
+  .btn.big{flex:1;padding:7px 9px}
+  label.chk{display:flex;align-items:center;gap:6px;margin:4px 0;cursor:pointer}
+  .kv{display:grid;grid-template-columns:auto 1fr;gap:2px 10px;font-variant-numeric:tabular-nums}
+  .kv div:nth-child(odd){color:var(--dim)}
+  .ws{display:flex;align-items:center;gap:8px}
+  .dot{width:9px;height:9px;border-radius:50%;background:var(--bad);flex:none}
+  .dot.ok{background:var(--ok)} .dot.wait{background:var(--warn)}
+  .ws input{flex:1;min-width:0;background:var(--panel2);color:var(--text);border:1px solid var(--line);
+    border-radius:4px;padding:3px 6px;font:12px ui-monospace,monospace}
+  table.dev{width:100%;border-collapse:collapse;margin-top:6px;font-size:12px;font-variant-numeric:tabular-nums}
+  table.dev th{color:var(--dim);font-weight:500;text-align:right;padding:2px 4px}
+  table.dev th:first-child,table.dev td:first-child{text-align:left}
+  table.dev td{text-align:right;padding:2px 4px;border-top:1px solid var(--line)}
+  table.dev td.big{color:var(--bad);font-weight:600}
+  .axis.locked input{pointer-events:none;opacity:.75}
+  #testBox{background:var(--panel2);border:1px solid var(--line);border-radius:6px;padding:10px;margin-top:4px}
+  #testMsg{min-height:16px;font-size:12px;margin-top:6px}
+  #testMsg.warn{color:var(--warn)} #testMsg.bad{color:var(--bad)}
+  .speed{display:flex;align-items:center;gap:8px;margin:8px 0 2px}
+  .speed span{width:78px;flex:none;white-space:nowrap;text-align:right;font-variant-numeric:tabular-nums}
+  #tip{position:absolute;pointer-events:none;background:var(--tipbg);border:1px solid var(--line);box-shadow:0 2px 8px rgba(0,0,0,.15);
+    padding:4px 8px;border-radius:4px;font-size:12px;display:none;white-space:nowrap}
+  #help{position:absolute;left:10px;bottom:8px;color:var(--dim);font-size:11.5px;pointer-events:none}
+  #err{position:absolute;inset:0;display:none;align-items:center;justify-content:center;padding:40px;
+    color:var(--bad);font-size:14px;text-align:center}
+  /* Biegeteil-Ansicht */
+  #part{position:absolute;inset:0;display:none;background:var(--partbg);z-index:5}
+  #partCanvas{position:absolute;inset:0}
+  #partInfo{position:absolute;left:12px;top:12px;bottom:12px;width:330px;background:var(--cardbg);
+    border:1px solid var(--line);border-radius:8px;padding:12px 14px;overflow-y:auto}
+  #partInfo h3{margin:0 0 2px;font-size:15px}
+  #partInfo table{width:100%;border-collapse:collapse;font-size:12px;font-variant-numeric:tabular-nums;margin-top:8px}
+  #partInfo th{color:var(--dim);font-weight:500;text-align:left;border-bottom:1px solid var(--line);padding:3px 4px}
+  #partInfo td{padding:3px 4px;border-bottom:1px solid var(--rowline)}
+  #partInfo td.n{text-align:right}
+  #partInfo tr[data-i]{cursor:default}
+  #partInfo tr.hi td{background:var(--rowhi)}
+  #partInfo .sw{display:inline-block;width:9px;height:9px;border-radius:2px;margin-right:6px;vertical-align:0}
+  #partBtns{position:absolute;right:12px;top:12px;display:flex;gap:6px}
+  #partHelp{position:absolute;right:12px;bottom:8px;color:var(--dim);font-size:11.5px;pointer-events:none}
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="view">
+    <div id="tip"></div>
+    <div id="help">Links ziehen: drehen · Rechts/Mitte ziehen: verschieben · Mausrad: zoomen · Doppelklick: Drehpunkt setzen</div>
+    <div id="err"></div>
+    <div id="part">
+      <div id="partCanvas"></div>
+      <div id="partInfo"></div>
+      <div id="partBtns">
+        <button class="btn" id="partFit">Einpassen</button>
+        <button class="btn" id="partNew">Neuer Versuch</button>
+        <button class="btn primary" id="partClose">Schließen</button>
+      </div>
+      <div id="partHelp">Links ziehen: drehen · Rechts ziehen: verschieben · Mausrad: zoomen</div>
+    </div>
+  </div>
+  <aside id="side">
+    <div class="head">
+      <div><h1>Biegbert</h1><div class="sub">Freiform-Biegeanlage · Visualisierung</div></div>
+      <button id="themeBtn" title="Hell/Dunkel umschalten">☀ Hell</button>
+    </div>
+
+    <section>
+      <h2>Betriebsart</h2>
+      <div class="seg" id="srcSeg">
+        <button data-s="standalone">Eigenständig</button><button data-s="replacement">Anlagenersatz</button><button data-s="twin">Zwilling</button>
+      </div>
+      <label class="chk"><input type="checkbox" id="srcAuto" checked> automatisch wählen (nach SPS)</label>
+      <div class="hint" id="srcText" style="margin-top:2px"></div>
+      <div id="srcLive" style="display:none">
+        <div class="kv" id="srcKv" style="margin-top:6px"></div>
+        <table class="dev" id="devTable"></table>
+      </div>
+    </section>
+
+    <section>
+      <h2>Biegeversuch</h2>
+      <div class="btns"><button class="btn primary big" id="tStart">Starte Versuch</button></div>
+      <div id="testBox" style="display:none">
+        <div class="btns">
+          <button class="btn big" id="tPlay">▶ Vorschub</button>
+          <button class="btn big" id="tStop">■ Versuch stoppen</button>
+        </div>
+        <div class="speed" id="tSpeedRow"><input type="range" id="tSpeed" min="1" max="87.5" step="0.5" value="30"><span id="tSpeedV">30 mm/s</span></div>
+        <div class="hint" id="tSpeedHint" style="margin-top:0">v_max bei Nenndrehzahl 87,5 mm/s, Lastenheft 50 mm/s.</div>
+        <label class="chk" id="tCoupleRow"><input type="checkbox" id="tCouple"> A tangential koppeln (φ_tan)</label>
+        <label class="chk" id="tAutoRow" style="display:none"><input type="checkbox" id="tAuto" checked> Rohr bei Ablaufstart automatisch einlegen</label>
+        <div class="kv" style="margin-top:6px">
+          <div>Rohr Ø × Länge</div><div id="tTube">–</div>
+          <div>Vorgeschoben</div><div id="tFed">–</div>
+          <div>Umgeformt</div><div id="tFormed">–</div>
+          <div>Restweg (Kollision)</div><div id="tRest">–</div>
+        </div>
+        <div id="testMsg"></div>
+      </div>
+    </section>
+
+    <section>
+      <h2>Detailstufe</h2>
+      <div class="seg" id="lod">
+        <button data-l="1">1</button><button data-l="2">2</button><button data-l="3">3</button><button data-l="4">4</button>
+      </div>
+      <div class="hint" id="lodText"></div>
+      <label class="chk"><input type="checkbox" id="ghost"> Übrige Teile transparent</label>
+    </section>
+
+    <section>
+      <h2>Achsen</h2>
+      <div id="axes"></div>
+      <div class="btns"><button id="reset">Alle auf 0</button></div>
+    </section>
+
+    <section>
+      <h2>Prozessgrößen (geometrisch)</h2>
+      <div class="kv">
+        <div>Werkzeugabstand v</div><div id="vV">–</div>
+        <div>Auslenkung u (= X)</div><div id="vU">–</div>
+        <div>Biegeradius R(u,v)</div><div id="vR">–</div>
+        <div>φ tangential</div><div id="vPhi">–</div>
+      </div>
+      <div class="hint">R = (u²+v²)/(2u), φ = arcsin(2uv/(u²+v²)) nach [Eberle].</div>
+    </section>
+
+    <section>
+      <h2>Ansicht</h2>
+      <div class="btns">
+        <button data-view="iso">Iso</button><button data-view="side">Seite</button>
+        <button data-view="top">Oben</button><button data-view="head">Biegekopf</button>
+        <button data-view="fit">Alles</button>
+      </div>
+      <label class="chk"><input type="checkbox" id="showAxes" checked> Rohrachse &amp; Achsrichtungen</label>
+    </section>
+
+    <section>
+      <h2>Verbindung (Python)</h2>
+      <div class="ws"><span class="dot" id="wsDot"></span><input id="wsUrl" spellcheck="false"><button class="btn" id="wsBtn">↻</button></div>
+      <div class="hint" id="wsText">–</div>
+    </section>
+
+    <section>
+      <h2>Info</h2>
+      <div class="kv"><div>Dreiecke</div><div id="iTri">–</div><div>Bildrate</div><div id="iFps">–</div></div>
+      <div class="hint">Geometrie: ORIG_Biegbert_Gesamt.STEP (Export 03.11.2026), vereinfacht.</div>
+    </section>
+  </aside>
+</div>
+
+<script src="three.r128.min.js"></script>
+<script src="biegbert_geometry.js"></script>
+<script>
+"use strict";
+(function () {
+
+/* ════════════════════════════════════════════════════════════════════
+   KONFIGURATION
+   Werte in mm bzw. Grad, bezogen auf den CAD-Stand (Ausnahme Z2, s. u.).
+   PROV = vorläufig: Grenzen/Nullpunkte nicht aus Endlagen bekannt,
+   sondern aus CAD-Geometrie oder Doku abgeschätzt → später ersetzen.
+   ════════════════════════════════════════════════════════════════════ */
+const PROV = true;
+const Z_DIE = -415.6098;           // Drehachse A / Matrizenmitte (CAD z)
+const Z_GUIDE_TIP_CAD = -395.6098; // Austritt Führungshülse im CAD-Stand
+const Z2_ZERO_SHIFT = -44.0;       // VORLÄUFIG: CAD-Stand kollidiert (Hülse 20 mm hinter Matrizenachse);
+                                   // Z2 = 0 so gelegt, dass v = 24 mm ([Eberle]-Referenz)
+const Z_STOP_CAD = -1695.1098;     // Rohranschlag = Stirnseite Adapterwelle bei Z1 = 0 (VORLÄUFIG, s. Hinweis)
+const Z_CHUCK_FRONT_CAD = -1670.61;// Vorderkante Futter bei Z1 = 0
+const Z_GUIDE_BODY_REAR_CAD = -881.36; // Hinterkante Führungsgrundkörper (Eisenschwein) im CAD-Stand
+const COLLISION_MARGIN = 2.0;      // mm Sicherheitsabstand Futter ↔ Führung
+const CHUCK_LEN = 56.5;            // Futter in z (−1727,1 … −1670,6)
+const NH_HALF_LEN = 73.0;          // halbe Länge Niederhalter-Platte in z
+const NH_CLEAR_OPEN = 45.0;        // VORLÄUFIG: ab dieser Öffnung passt das Futter (Ø ≈ 106) durch
+
+const AXES = [
+  { id:"Z1", name:"Z1 Vorschub", node:"Z1", kind:"lin", dir:[0,0,1], unit:"mm", min:-30, max:1282, step:0.5,
+    prov:PROV, note:"Vorläufig: 0 = CAD-Stand. Doku-Hub 1282 mm; tatsächlich begrenzt durch Kollision Futter ↔ Führung (abhängig von Z2)." },
+  { id:"W",  name:"W Rohrdrehung", node:"W", kind:"rot", axis:[0,0,1], unit:"°", min:-360, max:360, step:0.5,
+    prov:false, note:"Endlosachse, Sliderbereich nur zur Anzeige." },
+  { id:"Z2", name:"Z2 Führung", node:"Z2", kind:"lin", dir:[0,0,1], unit:"mm", min:-50, max:48, step:0.1,
+    prov:PROV, offset:Z2_ZERO_SHIFT,
+    note:"Vorläufig: Z2 = 0 ≙ v = 24 mm (CAD-Stand −44 mm). Doku ±50 mm; CAD-Schienen erlauben nur bis +48." },
+  { id:"X",  name:"X Matrizenauslenkung", node:"X", kind:"lin", dir:[1,0,0], unit:"mm", min:-50, max:50, step:0.05,
+    prov:PROV, note:"Grenzen ±50 mm laut Doku; Vorzeichen (+X) noch mit Maschine abgleichen." },
+  { id:"A",  name:"A Matrizendrehung", node:"A", kind:"rot", axis:[0,1,0], unit:"°", min:-60, max:60, step:0.1,
+    prov:PROV, note:"Grenzen ±60° laut Doku; Drehsinn (um +Y) noch mit Maschine abgleichen." },
+  { id:"NH1", name:"Niederhalter 1 (Öffnung)", node:["NH1_L","NH1_R"], kind:"open", unit:"mm", min:0, max:100, step:0.5,
+    prov:PROV, note:"Vorläufig: 0 = CAD-Stand (Platten ineinander, ohne Rohr). Hub DFM-50: 100 mm." },
+  { id:"NH2", name:"Niederhalter 2 (Öffnung)", node:["NH2_L","NH2_R"], kind:"open", unit:"mm", min:0, max:100, step:0.5,
+    prov:PROV, note:"Vorläufig: 0 = CAD-Stand (Platten ineinander, ohne Rohr). Hub DFM-50: 100 mm." },
+  { id:"NH3", name:"Niederhalter 3 (Öffnung)", node:["NH3_L","NH3_R"], kind:"open", unit:"mm", min:0, max:100, step:0.5,
+    prov:PROV, note:"Vorläufig: 0 = CAD-Stand (Platten ineinander, ohne Rohr). Hub DFM-50: 100 mm." },
+];
+const LOD_TEXT = {
+  1:"Nur Kontaktteile: Matrize, Führungshülse, Niederhalter-Platten, Futter, Adapterwelle.",
+  2:"+ Schlitten, Halter, Führungsaufsatz, Niederhalter-Zylinder.",
+  3:"+ Motoren, Getriebe, Spindeln, Linearführungen, Lager, Stützelemente.",
+  4:"+ Tisch, Gestell, Ventilinsel (ohne Schrauben/Kleinteile).",
+};
+const MATERIALS = {   // [Farbe, metalness, roughness]
+  bronze:[0xc08a48,.55,.38], pom:[0xefebe0,0,.7], chuck:[0x80858d,.6,.4], contact_steel:[0xa2a8b0,.6,.35],
+  steel:[0x8c96a3,.45,.5], mech:[0xadb2b8,.4,.5], drive:[0x2e3136,.3,.55], alu:[0xc8cdd3,.35,.45],
+  frame:[0x6c727a,.2,.7], pneu:[0x55657e,.2,.6],
+};
+// Halbzeug
+const TUBE_D = 14.9;               // = engste Stelle Matrize (Ø 14,93), Führungsbohrung Ø 15
+const TUBE_OVERHANG = 10.0;        // Rohr ragt beim Laden 10 mm über die Matrizenmitte hinaus
+const TUBE_COLOR = 0x7fb3d9;
+const TUBE_SEG = 20;               // Umfangssegmente
+const TUBE_MAX_RINGS = 6000;
+
+/* ════════════════════════════════════════════════════════════════════ */
+const G = window.BIEGBERT_GEOMETRY;
+const view = document.getElementById("view");
+function fail(msg){ const e=document.getElementById("err"); e.style.display="flex"; e.textContent=msg; throw new Error(msg); }
+if (!window.THREE) fail("three.r128.min.js nicht gefunden – muss im selben Ordner liegen.");
+if (!G) fail("biegbert_geometry.js nicht gefunden – muss im selben Ordner liegen.");
+const V3 = THREE.Vector3, D2R = Math.PI/180;
+
+// ── Renderer, Szene, Kamera ──────────────────────────────────────────
+function makeRenderer(){
+  const r = new THREE.WebGLRenderer({ antialias:true });
+  r.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+  r.outputEncoding = THREE.sRGBEncoding;
+  return r;
+}
+function addLights(scene, camera){
+  scene.add(new THREE.HemisphereLight(0xdfe6ef, 0x2a2622, 0.75));
+  const key = new THREE.DirectionalLight(0xffffff, 0.85); key.position.set(800, 1500, 600); scene.add(key);
+  const fill = new THREE.DirectionalLight(0xffffff, 0.35); fill.position.set(-900, 300, -1200); scene.add(fill);
+  const camLight = new THREE.DirectionalLight(0xffffff, 0.25); camera.add(camLight); scene.add(camera);
+}
+const renderer = makeRenderer();
+view.insertBefore(renderer.domElement, view.firstChild);
+renderer.domElement.tabIndex = 0;
+const scene = new THREE.Scene();
+scene.background = new THREE.Color();
+const camera = new THREE.PerspectiveCamera(35, 1, 5, 20000);
+addLights(scene, camera);
+let grid = new THREE.Group(); scene.add(grid);   // wird von applyTheme() erzeugt
+
+const pv = {};
+// ── Hell/Dunkel ──────────────────────────────────────────────────────
+const THEMES = {
+  dark:  { bg:0x16181c, partBg:0x121418, grid1:0x3a3f46, grid2:0x2a2e34, pgrid2:0x24282d, label:"☀ Hell" },
+  light: { bg:0xe9ecf0, partBg:0xf2f4f7, grid1:0xa9b0b9, grid2:0xcdd2d8, pgrid2:0xd9dde2, label:"☾ Dunkel" },
+};
+let theme = (() => {
+  try { const t = localStorage.getItem("biegbert.theme"); if (t === "light" || t === "dark") return t; } catch(_){}
+  return window.matchMedia && matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark";
+})();
+function replaceGrid(old, parent, size, div, c1, c2){
+  const g = new THREE.GridHelper(size, div, c1, c2);
+  g.position.copy(old.position); g.visible = old.visible; parent.remove(old);
+  if (old.geometry){ old.geometry.dispose(); old.material.dispose(); }
+  parent.add(g); return g;
+}
+function applyTheme(t){
+  theme = t === "light" ? "light" : "dark";
+  const c = THEMES[theme];
+  document.documentElement.dataset.theme = theme;
+  scene.background.set(c.bg);
+  if (!grid.isGridHelper) grid.position.set(0, -880, -1200);
+  grid = replaceGrid(grid, scene, 4000, 40, c.grid1, c.grid2);
+  if (pv.scene){ pv.scene.background.set(c.partBg); pv.grid = replaceGrid(pv.grid, pv.scene, 2000, 40, c.grid1, c.pgrid2); }
+  document.getElementById("themeBtn").textContent = c.label;
+  try { localStorage.setItem("biegbert.theme", theme); } catch(_){}
+  return theme;
+}
+document.getElementById("themeBtn").onclick = () => applyTheme(theme === "light" ? "dark" : "light");
+
+// ── Szenengraph nach Achsen ──────────────────────────────────────────
+const nodes = {};
+const root = new THREE.Group(); root.name = "Maschine"; scene.add(root);
+function mkNode(name, parent, originLocal){
+  const g = new THREE.Group(); g.name = name;
+  g.userData.base = new V3().fromArray(originLocal);
+  g.position.copy(g.userData.base); parent.add(g); nodes[name] = g; return g;
+}
+const O = G.nodeOrigin;
+mkNode("fix", root, [0,0,0]);
+mkNode("Z1", root, O.Z1);  mkNode("W", nodes.Z1, [0,0,0]);
+mkNode("Z2", root, O.Z2);
+mkNode("X", root, O.X);    mkNode("A", nodes.X, [0,0,0]);
+for (const k of [1,2,3]) for (const s of ["L","R"]) mkNode(`NH${k}_${s}`, root, O[`NH${k}_${s}`]);
+
+// ── Geometrie dekodieren ─────────────────────────────────────────────
+function b64(s, T){ const bin=atob(s), u8=new Uint8Array(bin.length); for(let i=0;i<bin.length;i++) u8[i]=bin.charCodeAt(i); return new T(u8.buffer); }
+const geoms = {};
+for (const [k, g] of Object.entries(G.geoms)){
+  const bg = new THREE.BufferGeometry();
+  bg.setAttribute("position", new THREE.BufferAttribute(b64(g.v, Float32Array), 3));
+  bg.setAttribute("normal", new THREE.BufferAttribute(b64(g.n, Int8Array), 3, true));
+  bg.setIndex(new THREE.BufferAttribute(b64(g.i, g.i32 ? Uint32Array : Uint16Array), 1));
+  bg.computeBoundingSphere(); bg.userData.nt = g.nt; geoms[k] = bg;
+}
+const mats = {}, ghostMats = {};
+for (const [k,[c,m,r]] of Object.entries(MATERIALS)){
+  const col = new THREE.Color(c).convertSRGBToLinear();   // Farbwerte sind sRGB, Renderer gibt sRGB aus
+  mats[k] = new THREE.MeshStandardMaterial({ color:col, metalness:m, roughness:r });
+  ghostMats[k] = new THREE.MeshStandardMaterial({ color:col, metalness:m, roughness:r, transparent:true, opacity:0.16, depthWrite:false });
+}
+const meshes = [];
+for (const inst of G.instances){
+  const mesh = new THREE.Mesh(geoms[inst.g], mats[inst.mat]);
+  mesh.matrixAutoUpdate = false; mesh.matrix.fromArray(inst.m);
+  mesh.userData = inst; nodes[inst.node].add(mesh); meshes.push(mesh);
+}
+
+// ── Hilfslinien: Rohrachse und Achsrichtungen ────────────────────────
+const helpers = new THREE.Group(); scene.add(helpers);
+function line(a, b, color, parent){
+  const g = new THREE.BufferGeometry().setFromPoints([new V3(...a), new V3(...b)]);
+  const l = new THREE.Line(g, new THREE.LineBasicMaterial({ color, transparent:true, opacity:.8, depthTest:false }));
+  l.renderOrder = 10; (parent || helpers).add(l); return l;
+}
+line([0,0,-2150],[0,0,-150], 0xe0a458);
+const aAxisHelper = new THREE.Group(); nodes.X.add(aAxisHelper);
+line([0,-150,0],[0,150,0], 0x5fa8e0, aAxisHelper);
+function arrow(dir, origin, len, color, parent){
+  const a = new THREE.ArrowHelper(new V3(...dir), new V3(...origin), len, color, 18, 9);
+  a.traverse(o=>{ if(o.material){ o.material.depthTest=false; o.material.transparent=true; } o.renderOrder=10; });
+  parent.add(a); return a;
+}
+arrow([0,0,1],[0,60,O.Z1[2]],120,0x5fbf77,helpers);
+arrow([0,0,1],[0,60,O.Z2[2]-150],120,0x5fbf77,helpers);
+arrow([1,0,0],[0,120,O.X[2]],120,0x5fbf77,helpers);
+
+// ── Achsen setzen ────────────────────────────────────────────────────
+const values = {}; for (const a of AXES) values[a.id] = 0;
+const byId = Object.fromEntries(AXES.map(a=>[a.id,a]));
+const tmpV = new V3();
+function applyAxis(a){
+  const v = values[a.id];
+  if (a.kind === "lin"){
+    const n = nodes[a.node], d = v + (a.offset || 0);
+    n.position.copy(n.userData.base).addScaledVector(tmpV.fromArray(a.dir), d);
+  } else if (a.kind === "rot"){
+    nodes[a.node].quaternion.setFromAxisAngle(tmpV.fromArray(a.axis).normalize(), v * D2R);
+  } else if (a.kind === "open"){            // Platte auf +x-Seite öffnet nach +x, die andere nach −x
+    for (const name of a.node){
+      const n = nodes[name], s = n.userData.base.x >= 0 ? 1 : -1;
+      n.position.copy(n.userData.base); n.position.x += s * v;
+    }
+  }
+}
+// Kollision Futter ↔ Führungsgrundkörper: Z1 ≤ z1Max(Z2), Z2 ≥ z2Min(Z1)
+const Z1_COLL_BASE = (Z_GUIDE_BODY_REAR_CAD + Z2_ZERO_SHIFT) - Z_CHUCK_FRONT_CAD - COLLISION_MARGIN;
+function z1Max(z2 = values.Z2){ return Z1_COLL_BASE + z2; }
+function dynLimits(a){
+  let lo = a.min, hi = a.max;
+  if (a.id === "Z1") hi = Math.min(hi, z1Max());
+  if (a.id === "Z2") lo = Math.max(lo, values.Z1 - Z1_COLL_BASE);
+  if (a.id === "A" && test.active && test.coupleA) { lo = hi = values.A; }
+  return [lo, hi];
+}
+function clamp(a, v){ v = Number(v); if (!isFinite(v)) return values[a.id]; const [lo,hi] = dynLimits(a); return Math.min(hi, Math.max(lo, v)); }
+
+/** Werte setzen. source: "user" | "ext" (Python) | "api" | "feed" | "couple" */
+function setAxes(obj, source = "api"){
+  if (!obj || typeof obj !== "object") return getAxes();
+  const changed = {};
+  for (const [id, raw] of Object.entries(obj)){
+    const a = byId[id]; if (!a) { console.warn("Unbekannte Achse:", id); continue; }
+    if (id === "A" && test.active && test.coupleA && source !== "couple") continue;   // A ist gekoppelt
+    if (source === "ext"){ const v = Number(raw); if (!isFinite(v)) continue; values[id] = v; }   // Ist-/Sollwerte der SPS nicht begrenzen
+    else values[id] = clamp(a, raw);
+    applyAxis(a); changed[id] = values[id];
+    syncUI(a, source === "ext");
+  }
+  if (test.active) testOnAxes();
+  updateProcess();
+  if (source === "user"){
+    wsSend({ type:"manual", values:changed });
+    if (typeof api.onUserChange === "function") try { api.onUserChange({ ...values }); } catch(e){ console.error(e); }
+  }
+  return getAxes();
+}
+function getAxes(){ return { ...values }; }
+function fmt(a, v){ return (+v).toFixed(a.step < 0.1 ? 2 : 1); }
+
+// ── Seitenleiste: Slider ─────────────────────────────────────────────
+const axisUI = {};
+const axBox = document.getElementById("axes");
+for (const a of AXES){
+  const box = document.createElement("div"); box.className = "axis";
+  box.innerHTML = `<div class="row"><span class="name">${a.name}</span>${a.prov ? `<span class="badge" title="${a.note}">vorläufig</span>` : ""}
+    <input type="number" step="${a.step}" min="${a.min}" max="${a.max}"><span class="unit">${a.unit}</span></div>
+    <input type="range" min="${a.min}" max="${a.max}" step="${a.step}">
+    <div class="lim"><span>${a.min}</span><span class="hiLbl">${a.max}</span></div>`;
+  if (!a.prov) box.title = a.note;
+  const range = box.querySelector("input[type=range]"), num = box.querySelector("input[type=number]");
+  range.addEventListener("input", () => { setAxes({ [a.id]: range.value }, "user"); range.value = values[a.id]; });
+  num.addEventListener("change", () => setAxes({ [a.id]: num.value }, "user"));
+  axBox.appendChild(box); axisUI[a.id] = { box, range, num, hi: box.querySelector(".hiLbl") };
+}
+function syncUI(a, flash){
+  const ui = axisUI[a.id]; if (!ui) return;
+  ui.range.value = values[a.id]; ui.num.value = fmt(a, values[a.id]);
+  if (flash){ ui.box.classList.add("ext"); clearTimeout(ui.t); ui.t = setTimeout(()=>ui.box.classList.remove("ext"), 400); }
+}
+document.getElementById("reset").onclick = () => setAxes(Object.fromEntries(AXES.map(a=>[a.id, 0])), "user");
+
+// ── Prozessgrößen (Eberle) ───────────────────────────────────────────
+function guideTipZ(){ return Z_GUIDE_TIP_CAD + Z2_ZERO_SHIFT + values.Z2; }
+/** Geometrie der Biegezone für u, v: Radius, Winkel, Bogenlänge, Krümmung */
+function bendZone(u = values.X, v = Z_DIE - guideTipZ()){
+  const au = Math.abs(u), vv = Math.max(0.01, v);
+  if (au < 1e-6) return { u, v, R:Infinity, kappa:0, phi:0, phiS:0, L:vv, sgn:0 };
+  const R = (au*au + vv*vv) / (2*au), phi = Math.atan2(vv, R - au);
+  return { u, v, R, kappa:1/R, phi, phiS:Math.sign(u)*phi, L:R*phi, sgn:Math.sign(u) };
+}
+function updateProcess(){
+  const z = bendZone();
+  document.getElementById("vV").textContent = z.v.toFixed(2) + " mm" + (z.v <= 0 ? "  ⚠ Kollision" : "");
+  document.getElementById("vU").textContent = z.u.toFixed(2) + " mm";
+  document.getElementById("vR").textContent = isFinite(z.R) ? z.R.toFixed(1) + " mm" : "∞";
+  document.getElementById("vPhi").textContent = (z.phiS / D2R).toFixed(2) + " °";
+  axisUI.Z1.hi.innerHTML = `<span class="dyn" title="Kollision Futter ↔ Führung">max ${z1Max().toFixed(0)}</span>`;
+  axisUI.A.box.classList.toggle("locked", test.active && test.coupleA);
+}
+
+// ── Detailstufe ──────────────────────────────────────────────────────
+let level = 4, ghost = false;
+function setDetailLevel(l){
+  level = Math.min(4, Math.max(1, Math.round(+l || 1)));
+  let tri = 0;
+  for (const m of meshes){
+    const inst = m.userData, show = inst.lvl <= level;
+    m.visible = show;
+    m.material = (ghost && inst.lvl > 1) ? ghostMats[inst.mat] : mats[inst.mat];
+    if (show) tri += m.geometry.userData.nt;
+  }
+  grid.visible = level >= 4;
+  document.querySelectorAll("#lod button").forEach(b => b.classList.toggle("on", +b.dataset.l === level));
+  document.getElementById("lodText").textContent = LOD_TEXT[level];
+  document.getElementById("iTri").textContent = tri.toLocaleString("de-DE");
+  return level;
+}
+document.querySelectorAll("#lod button").forEach(b => b.onclick = () => setDetailLevel(b.dataset.l));
+document.getElementById("ghost").onchange = e => { ghost = e.target.checked; setDetailLevel(level); };
+document.getElementById("showAxes").onchange = e => { helpers.visible = aAxisHelper.visible = e.target.checked; };
+
+// ── Orbit-Steuerung (eigene, r128 enthält keine) ─────────────────────
+function createOrbit(el, cam, opts = {}){
+  const ctl = { target:new V3(), radius:2000, theta:0.8, phi:1.1 };
+  ctl.update = () => {
+    ctl.phi = Math.min(Math.PI - 0.02, Math.max(0.02, ctl.phi));
+    ctl.radius = Math.min(15000, Math.max(5, ctl.radius));
+    const s = Math.sin(ctl.phi);
+    cam.position.set(ctl.target.x + ctl.radius*s*Math.sin(ctl.theta), ctl.target.y + ctl.radius*Math.cos(ctl.phi),
+                     ctl.target.z + ctl.radius*s*Math.cos(ctl.theta));
+    cam.lookAt(ctl.target);
+  };
+  ctl.fit = (box, theta, phi) => {
+    if (box.isEmpty()) return;
+    const c = box.getCenter(new V3()), s = box.getSize(new V3()).length();
+    ctl.target.copy(c); ctl.radius = s / (2 * Math.tan(cam.fov/2 * D2R)) * 0.9;
+    if (theta !== undefined){ ctl.theta = theta; ctl.phi = phi; }
+    ctl.update();
+  };
+  let drag = null;
+  el.addEventListener("contextmenu", e => e.preventDefault());
+  el.addEventListener("pointerdown", e => {
+    el.focus && el.focus(); el.setPointerCapture(e.pointerId);
+    drag = { x:e.clientX, y:e.clientY, mode:(e.button === 0 && !e.shiftKey) ? "rot" : "pan" };
+  });
+  el.addEventListener("pointermove", e => {
+    if (drag){
+      const dx = e.clientX - drag.x, dy = e.clientY - drag.y; drag.x = e.clientX; drag.y = e.clientY;
+      if (drag.mode === "rot"){ ctl.theta -= dx * 0.006; ctl.phi -= dy * 0.006; }
+      else {
+        const k = 2 * ctl.radius * Math.tan(cam.fov/2 * D2R) / el.clientHeight;
+        const right = new V3().setFromMatrixColumn(cam.matrix, 0), up = new V3().setFromMatrixColumn(cam.matrix, 1);
+        ctl.target.addScaledVector(right, -dx * k).addScaledVector(up, dy * k);
+      }
+      ctl.update(); opts.onDrag && opts.onDrag();
+    } else opts.onHover && opts.onHover(e);
+  });
+  el.addEventListener("pointerup", e => { drag = null; el.releasePointerCapture(e.pointerId); });
+  el.addEventListener("pointerleave", () => opts.onLeave && opts.onLeave());
+  el.addEventListener("wheel", e => {
+    e.preventDefault();
+    const f = Math.exp(Math.max(-1, Math.min(1, e.deltaY * (e.deltaMode === 1 ? 0.05 : 0.0015))));
+    const r = el.getBoundingClientRect();
+    const ndc = new V3(((e.clientX-r.left)/r.width)*2-1, -((e.clientY-r.top)/r.height)*2+1, 0.5).unproject(cam);
+    const dir = ndc.sub(cam.position).normalize(), fwd = new V3(); cam.getWorldDirection(fwd);
+    const p = cam.position.clone().addScaledVector(dir, ctl.radius / Math.max(0.2, dir.dot(fwd)));
+    ctl.target.lerp(p, 1 - f); ctl.radius *= f; ctl.update();
+  }, { passive:false });
+  if (opts.pick) el.addEventListener("dblclick", e => { const h = opts.pick(e); if (h){ ctl.target.copy(h.point); ctl.radius = cam.position.distanceTo(h.point); ctl.update(); } });
+  return ctl;
+}
+const el = renderer.domElement;
+const ray = new THREE.Raycaster(), mouse = new THREE.Vector2();
+function pick(e){
+  const r = el.getBoundingClientRect();
+  mouse.set(((e.clientX-r.left)/r.width)*2-1, -((e.clientY-r.top)/r.height)*2+1);
+  ray.setFromCamera(mouse, camera);
+  const vis = meshes.filter(m => m.visible && !(ghost && m.userData.lvl > 1));
+  if (tube.mesh.visible) vis.push(tube.mesh);
+  return ray.intersectObjects(vis, false)[0];
+}
+const ctl = createOrbit(el, camera, { pick, onHover:queueHover, onDrag:hideTip, onLeave:hideTip });
+
+// Hover-Info
+const tip = document.getElementById("tip");
+const NODE_NAME = { fix:"fest", Z1:"Z1 Vorschub", W:"W Rohrdrehung", Z2:"Z2 Führung", X:"X Matrizenauslenkung", A:"A Matrizendrehung" };
+let hoverEv = null, hoverPending = false;
+function queueHover(e){ hoverEv = e; if (!hoverPending){ hoverPending = true; setTimeout(doHover, 80); } }
+function doHover(){
+  hoverPending = false; if (!hoverEv) return;
+  const h = pick(hoverEv);
+  if (!h){ hideTip(); return; }
+  let html;
+  if (h.object === tube.mesh) html = `<b>Halbzeug</b><br><span style="color:var(--dim)">Ø ${TUBE_D} × ${test.L.toFixed(1)} mm</span>`;
+  else {
+    const u = h.object.userData;
+    const nm = u.label.replace(/\.stp$|\.step$/i, "").replace(/^ORIG_/, "");
+    const nn = NODE_NAME[u.node] || ("Niederhalter " + u.node.slice(2).replace("_", " "));
+    html = `<b>${nm}</b><br><span style="color:var(--dim)">${nn} · Stufe ${u.lvl}</span>`;
+  }
+  const r = view.getBoundingClientRect();
+  tip.innerHTML = html;
+  tip.style.left = (hoverEv.clientX - r.left + 14) + "px"; tip.style.top = (hoverEv.clientY - r.top + 12) + "px";
+  tip.style.display = "block";
+}
+function hideTip(){ tip.style.display = "none"; }
+
+// Ansichten
+function visibleBox(){ const b = new THREE.Box3(); for (const m of meshes) if (m.visible) b.expandByObject(m); if (tube.mesh.visible) b.expandByObject(tube.mesh); return b; }
+function setView(v){
+  scene.updateMatrixWorld(true);
+  const b = visibleBox();
+  if (v === "iso")  ctl.fit(b, 0.75, 1.05);
+  if (v === "side") ctl.fit(b, Math.PI/2, Math.PI/2);
+  if (v === "top")  ctl.fit(b, Math.PI/2, 0.03);
+  if (v === "fit")  ctl.fit(b);
+  if (v === "head"){ ctl.target.set(0, 0, Z_DIE - 60); ctl.radius = 650; ctl.theta = 0.9; ctl.phi = 1.0; ctl.update(); }
+}
+document.querySelectorAll("[data-view]").forEach(b => b.onclick = () => setView(b.dataset.view));
+
+/* ════════════════════════════════════════════════════════════════════
+   ROHR: Mittellinie → Rohrnetz
+   Ring = Position p + Querschnittsrahmen (X, Y); Tangente T = X × Y.
+   ════════════════════════════════════════════════════════════════════ */
+function makeTubeMesh(maxRings, material){
+  const n = maxRings * TUBE_SEG;
+  const pos = new THREE.BufferAttribute(new Float32Array(n*3), 3), nor = new THREE.BufferAttribute(new Float32Array(n*3), 3);
+  pos.setUsage(THREE.DynamicDrawUsage); nor.setUsage(THREE.DynamicDrawUsage);
+  const idx = new Uint32Array((maxRings-1) * TUBE_SEG * 6); let k = 0;
+  for (let r = 0; r < maxRings-1; r++) for (let s = 0; s < TUBE_SEG; s++){
+    const a = r*TUBE_SEG + s, b = r*TUBE_SEG + (s+1)%TUBE_SEG, c = a + TUBE_SEG, d = b + TUBE_SEG;
+    idx[k++]=a; idx[k++]=b; idx[k++]=c; idx[k++]=b; idx[k++]=d; idx[k++]=c;
+  }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute("position", pos); g.setAttribute("normal", nor); g.setIndex(new THREE.BufferAttribute(idx, 1));
+  g.setDrawRange(0, 0);
+  const m = new THREE.Mesh(g, material); m.frustumCulled = false; m.userData.maxRings = maxRings;
+  return m;
+}
+function writeRings(mesh, rings){
+  const g = mesh.geometry, P = g.attributes.position.array, N = g.attributes.normal.array, R = TUBE_D/2;
+  const n = Math.min(rings.length, mesh.userData.maxRings);
+  let k = 0;
+  for (let i = 0; i < n; i++){
+    const { p, X, Y } = rings[i];
+    for (let s = 0; s < TUBE_SEG; s++){
+      const a = 2*Math.PI*s/TUBE_SEG, c = Math.cos(a), si = Math.sin(a);
+      const nx = X.x*c + Y.x*si, ny = X.y*c + Y.y*si, nz = X.z*c + Y.z*si;
+      N[k] = nx; N[k+1] = ny; N[k+2] = nz;
+      P[k] = p.x + nx*R; P[k+1] = p.y + ny*R; P[k+2] = p.z + nz*R; k += 3;
+    }
+  }
+  g.attributes.position.needsUpdate = g.attributes.normal.needsUpdate = true;
+  g.setDrawRange(0, Math.max(0, n-1) * TUBE_SEG * 6);
+  g.computeBoundingSphere(); g.computeBoundingBox();
+  if (rings.length > mesh.userData.maxRings) console.warn("Rohr: zu viele Ringe", rings.length);
+}
+/** Laufender Rahmen entlang der Mittellinie (rotationsminimierend, keine Torsion). */
+function frame(p, T, X, Y){ return { p:p.clone(), T:T.clone(), X:X.clone(), Y:Y.clone() }; }
+const _d = new V3(), _b = new V3();
+/** Kreisbogen der Länge ds mit Krümmung k in Richtung d (⊥ T) */
+function stepArc(f, k, d, ds){
+  if (k < 1e-9){ f.p.addScaledVector(f.T, ds); return; }
+  const th = k*ds;
+  f.p.addScaledVector(f.T, Math.sin(th)/k).addScaledVector(d, (1-Math.cos(th))/k);
+  _b.crossVectors(f.T, d).normalize();
+  f.T.applyAxisAngle(_b, th); f.X.applyAxisAngle(_b, th); f.Y.applyAxisAngle(_b, th);
+}
+/** Integriert Elemente (1 mm) von s0 bis s1. K = Krümmung, P = Materialwinkel; alphaOff dreht P. */
+function integrate(rings, f, K, P, s0, s1, alphaOff){
+  let s = s0, open = false;
+  while (s < s1 - 1e-9){
+    const i = Math.min(K.length-1, Math.floor(s + 1e-9));
+    const ds = Math.min(i + 1, s1) - s;
+    if (ds <= 1e-9){ s = i + 1; continue; }
+    const k = K[i];
+    if (k < 1e-9){ f.p.addScaledVector(f.T, ds); open = true; }
+    else {
+      if (open){ rings.push(frame(f.p, f.T, f.X, f.Y)); open = false; }
+      const a = P[i] + alphaOff;
+      _d.copy(f.X).multiplyScalar(Math.cos(a)).addScaledVector(f.Y, Math.sin(a));
+      stepArc(f, k, _d.clone(), ds);
+      rings.push(frame(f.p, f.T, f.X, f.Y));
+    }
+    s += ds;
+  }
+  if (open) rings.push(frame(f.p, f.T, f.X, f.Y));
+}
+
+/* ════════════════════════════════════════════════════════════════════
+   BIEGEVERSUCH
+   Materialkoordinate σ: 0 = Rohrende am Anschlag (Adapterwelle), L = Rohrspitze.
+   σ_d = Material in der Matrizenachse = gerade Länge Anschlag→Führungsaustritt + Bogenlänge Biegezone.
+   Fällt σ_d (Vorschub), erhalten die neu durchgelaufenen Elemente die aktuelle Krümmung κ
+   und den Materialwinkel ψ = β − W (β = Biegerichtung in der Maschine: 0 für +X, π für −X).
+   ════════════════════════════════════════════════════════════════════ */
+const tubeMat = new THREE.MeshStandardMaterial({ color:new THREE.Color(TUBE_COLOR).convertSRGBToLinear(), metalness:.35, roughness:.4, side:THREE.DoubleSide });
+const tube = { mesh: makeTubeMesh(TUBE_MAX_RINGS, tubeMat) };
+tube.mesh.visible = false; scene.add(tube.mesh);
+
+const Z1_BACK_TOL = 2;   // mm
+const test = { active:false, playing:false, speed:30, coupleA:false, L:0, K:null, P:null, minFormed:0, sigmaD:0, lastMsg:"",
+               z1Max:0, stale:false };   // stale: Z1 ist zurückgefahren → Rohr gilt als entnommen
+
+function sigmaDie(z = bendZone()){
+  const zStop = Z_STOP_CAD + values.Z1;
+  return { zStop, straight: guideTipZ() - zStop, sd: guideTipZ() - zStop + z.L, z };
+}
+function testStart(){
+  test.playing = false;
+  if (SRC.mode === "standalone") setAxes({ Z1: 0 }, "api");   // sonst bestimmt die SPS die Achsen
+  const { sd } = sigmaDie();
+  test.L = sd + TUBE_OVERHANG;
+  const n = Math.ceil(test.L) + 2;
+  test.K = new Float32Array(n); test.P = new Float32Array(n);
+  test.minFormed = sd; test.sigmaD = sd;
+  test.z1Max = values.Z1; test.stale = false;
+  test.active = true;
+  tube.mesh.visible = true;
+  closePart(false);
+  testOnAxes(); updateTestUI(); msg("");
+  wsSend({ type:"test", event:"started", length:+test.L.toFixed(2), diameter:TUBE_D });
+}
+function testOnAxes(){
+  if (test.active && test.coupleA){
+    const z = bendZone(), A = z.phiS / D2R;
+    const a = byId.A, lim = Math.min(Math.abs(A), a.max);
+    values.A = Math.sign(A) * lim; applyAxis(a); syncUI(a);
+    if (Math.abs(A) > a.max) msg(`φ_tan = ${A.toFixed(1)}° liegt außerhalb A ±${a.max}° – A begrenzt.`, "warn");
+  }
+  // Z1 kann das Rohr nicht durch die Matrize zurückziehen: fährt Z1 deutlich zurück, ist das Teil entnommen.
+  if (values.Z1 > test.z1Max) test.z1Max = values.Z1;
+  else if (!test.stale && values.Z1 < test.z1Max - Z1_BACK_TOL){
+    test.stale = true;
+    if (SRC.mode !== "standalone") msg("Vorschub zurückgefahren – beim nächsten Ablaufstart wird ein neues Rohr eingelegt.");
+  }
+  const { zStop, straight, sd, z } = sigmaDie();
+  // Neu durch die Matrize gelaufenes Material umformen
+  if (sd < test.minFormed){
+    const beta = z.sgn < 0 ? Math.PI : 0, psi = beta - values.W * D2R;
+    const i0 = Math.max(0, Math.floor(sd)), i1 = Math.min(test.K.length - 1, Math.ceil(test.minFormed) - 1);
+    for (let i = i0; i <= i1; i++){ test.K[i] = z.kappa; test.P[i] = psi; }
+    test.minFormed = Math.max(0, sd);
+  }
+  test.sigmaD = sd;
+  buildMachineTube(zStop, straight, sd, z);
+  updateTestUI();
+}
+function buildMachineTube(zStop, straight, sd, z){
+  const L = test.L, rings = [];
+  const f = { p:new V3(0,0,zStop), T:new V3(0,0,1), X:new V3(1,0,0), Y:new V3(0,1,0) };
+  rings.push(frame(f.p, f.T, f.X, f.Y));
+  // 1) gerader Teil Anschlag → Führungsaustritt
+  const sStraight = Math.min(L, Math.max(0, straight));
+  f.p.addScaledVector(f.T, sStraight); rings.push(frame(f.p, f.T, f.X, f.Y));
+  // 2) Biegezone Führung → Matrize (aktueller Eberle-Bogen in der X-Z-Ebene)
+  const sArcEnd = Math.min(L, sd);
+  const arcLen = Math.max(0, sArcEnd - sStraight);
+  if (arcLen > 0){
+    const d = new V3(z.sgn || 1, 0, 0);
+    const n = Math.max(1, Math.ceil(arcLen / 1.5));
+    for (let i = 0; i < n; i++){ stepArc(f, z.kappa, d.clone().projectOnPlane(f.T).normalize(), arcLen/n); rings.push(frame(f.p, f.T, f.X, f.Y)); }
+  }
+  // 3) umgeformter Teil hinter der Matrize (starr, dreht mit W um die Tangente)
+  if (sd < L) integrate(rings, f, test.K, test.P, Math.max(0, sd), L, values.W * D2R);
+  writeRings(tube.mesh, rings);
+}
+function testPlay(){ if (!test.active) return; test.playing = true; updateTestUI(); msg(""); wsSend({ type:"test", event:"play" }); }
+function testPause(){ if (!test.active) return; test.playing = false; updateTestUI(); wsSend({ type:"test", event:"pause", Z1:values.Z1 }); }
+function testFeed(dt){
+  if (!test.playing) return;
+  const max = z1Max();
+  let z1 = values.Z1 + test.speed * dt;
+  if (z1 >= max - 1e-6){
+    z1 = max; setAxes({ Z1: z1 }, "feed"); test.playing = false; updateTestUI();
+    msg("Vorschub gestoppt: Kollisionsgrenze Futter ↔ Führung erreicht.", "warn");
+    wsSend({ type:"test", event:"limit", Z1:values.Z1 }); return;
+  }
+  setAxes({ Z1: z1 }, "feed");
+}
+/** Biegeteil im Materialrahmen: σ = 0 im Ursprung, Startrichtung +Z, Materialwinkel 0 = +X. */
+function computePart(){
+  const { straight, sd, z } = sigmaDie();
+  const L = test.L, n = test.K.length;
+  const K = new Float32Array(n), P = new Float32Array(n);
+  K.set(test.K); P.set(test.P);
+  // Biegezone (zwischen Führung und Matrize) ist ebenfalls gekrümmt
+  const beta = z.sgn < 0 ? Math.PI : 0, psi = beta - values.W * D2R;
+  for (let i = Math.max(0, Math.floor(straight)); i < Math.min(n, Math.ceil(sd)); i++){ K[i] = z.kappa; P[i] = psi; }
+  for (let i = 0; i < Math.min(n, Math.floor(straight)); i++){ K[i] = 0; }
+  // Segmente bilden: Gerade / Bogen (gleiche Ebene); Elementlänge 1 mm, letztes ggf. kürzer
+  const segs = []; let cur = null;
+  for (let i = 0; i < Math.ceil(L); i++){
+    const ds = Math.min(i + 1, L) - i, k = K[i];
+    const type = k < 1e-7 ? "Gerade" : "Bogen";
+    const plane = type === "Bogen" ? ((P[i] % (2*Math.PI)) + 2*Math.PI) % (2*Math.PI) : null;
+    if (!cur || cur.type !== type || (type === "Bogen" && Math.abs(angDiff(plane, cur.plane)) > 1e-3)){
+      cur = { type, length:0, angle:0, rMin:Infinity, rMax:0, plane, start:i }; segs.push(cur);
+    }
+    cur.length += ds;
+    if (type === "Bogen"){ cur.angle += k*ds; const r = 1/k; cur.rMin = Math.min(cur.rMin, r); cur.rMax = Math.max(cur.rMax, r); }
+  }
+  // Ebenen relativ zur ersten Biegeebene; Mittellinie segmentweise integrieren (für Hervorhebung)
+  const firstPlane = (segs.find(s => s.type === "Bogen") || {}).plane || 0;
+  const f = { p:new V3(), T:new V3(0,0,1), X:new V3(1,0,0), Y:new V3(0,1,0) };
+  const segRings = [], rings = [];
+  for (const s of segs){
+    const r = [frame(f.p, f.T, f.X, f.Y)];
+    integrate(r, f, K, P, s.start, Math.min(L, s.start + s.length), -firstPlane);
+    segRings.push(r);
+    rings.push(...(rings.length ? r.slice(1) : r));
+  }
+  return {
+    length:L, diameter:TUBE_D, rings, segRings,
+    segments: segs.map(s => ({ type:s.type, length:+s.length.toFixed(2),
+      ...(s.type === "Bogen" ? { angle_deg:+(s.angle/D2R).toFixed(2), r_min:+s.rMin.toFixed(2), r_max:+s.rMax.toFixed(2),
+          plane_deg:+(angDiff(s.plane, firstPlane)/D2R).toFixed(1) } : {}) })),
+  };
+}
+function angDiff(a, b){ let d = a - b; while (d > Math.PI) d -= 2*Math.PI; while (d < -Math.PI) d += 2*Math.PI; return d; }
+function testStop(){
+  if (!test.active) return null;
+  test.playing = false;
+  const part = computePart();
+  test.active = false; tube.mesh.visible = false;
+  updateTestUI(); updateProcess(); msg("");
+  showPart(part);
+  wsSend({ type:"test", event:"stopped" });
+  wsSend({ type:"part", length:+part.length.toFixed(2), diameter:TUBE_D, segments:part.segments,
+           centerline:part.rings.map(r => [+r.p.x.toFixed(3), +r.p.y.toFixed(3), +r.p.z.toFixed(3)]) });
+  return part;
+}
+
+// Seitenleiste Versuch
+const $ = id => document.getElementById(id);
+function msg(t, cls = ""){ const m = $("testMsg"); m.textContent = t; m.className = cls; }
+function updateTestUI(){
+  const sa = SRC.mode === "standalone";
+  $("tStart").textContent = sa ? (test.active ? "Versuch neu starten" : "Starte Versuch") : (test.active ? "Rohr neu einlegen" : "Rohr einlegen");
+  for (const id of ["tPlay", "tSpeedRow", "tSpeedHint", "tCoupleRow"]) $(id).style.display = sa ? "" : "none";
+  $("tAutoRow").style.display = sa ? "none" : "";
+  $("tStop").textContent = sa ? "■ Versuch stoppen" : "■ Versuch beenden";
+  $("testBox").style.display = test.active ? "" : "none";
+  $("tPlay").textContent = test.playing ? "⏸ Pause" : "▶ Vorschub";
+  $("tSpeedV").textContent = test.speed.toFixed(1).replace(".0","") + " mm/s";
+  if (!test.active) return;
+  $("tTube").textContent = `Ø ${TUBE_D} × ${test.L.toFixed(1)} mm`;
+  $("tFed").textContent = values.Z1.toFixed(1) + " mm";
+  $("tFormed").textContent = Math.max(0, test.L - Math.max(0, test.sigmaD)).toFixed(1) + " mm";
+  $("tRest").textContent = (z1Max() - values.Z1).toFixed(1) + " mm";
+  // Hinweis: Futter läuft auf geschlossenen Niederhalter
+  const front = Z_CHUCK_FRONT_CAD + values.Z1, rear = front - CHUCK_LEN;
+  for (const k of [1,2,3]){
+    const zc = O[`NH${k}_L`][2];
+    if (values[`NH${k}`] < NH_CLEAR_OPEN && front > zc - NH_HALF_LEN - 30 && rear < zc + NH_HALF_LEN){
+      msg(`Futter erreicht Niederhalter ${k} – bitte öffnen (Öffnung ≥ ${NH_CLEAR_OPEN} mm).`, "bad"); return;
+    }
+  }
+  if ($("testMsg").className === "bad") msg("");
+}
+$("tStart").onclick = testStart;
+$("tPlay").onclick = () => test.playing ? testPause() : testPlay();
+$("tStop").onclick = testStop;
+$("tSpeed").oninput = e => { test.speed = +e.target.value; updateTestUI(); };
+$("tCouple").onchange = e => { test.coupleA = e.target.checked; if (test.active) testOnAxes(); updateProcess(); };
+function setSpeed(v){ test.speed = Math.min(87.5, Math.max(1, +v || 30)); $("tSpeed").value = test.speed; updateTestUI(); }
+function setCoupleA(b){ test.coupleA = !!b; $("tCouple").checked = test.coupleA; if (test.active) testOnAxes(); updateProcess(); }
+
+/* ════════════════════════════════════════════════════════════════════
+   BETRIEBSART
+   standalone  – eigenständig: Slider bewegen das Modell, Daten vom Backend werden ignoriert
+   replacement – Anlagenersatz: die SPS (TwinCAT mit simulierten Achsen oder SPS-Simulation im
+                 Backend) steuert, die Visualisierung zeigt nur an (keine Rückmeldung an die SPS)
+   twin        – digitaler Zwilling: Istwerte der realen Anlage, nur Anzeige, Soll/Ist-Vergleich
+   Automatik: ohne Daten → eigenständig; Daten mit bSimulation → Anlagenersatz; sonst Zwilling.
+   ════════════════════════════════════════════════════════════════════ */
+const SRC = { mode:"standalone", auto:true, lastData:0, simulation:null, process:null, set:null, act:null,
+              lastStep:0, ignoredNote:false, coupleSaved:false };
+const SRC_TEXT = {
+  standalone: "Eigenständig: Slider und Biegeversuch steuern das Modell. Daten vom Backend werden ignoriert.",
+  replacement: "Anlagenersatz: Die SPS (simuliert) steuert die Achsen, die Visualisierung zeigt nur an.",
+  twin: "Digitaler Zwilling: Istwerte der realen Anlage, nur Anzeige.",
+};
+const DEV_TOL = { Z1:0.5, Z2:0.1, X:0.05, A:0.2, W:0.5 };
+try { const d = JSON.parse(localStorage.getItem("biegbert.source") || "null"); if (d){ SRC.auto = d.auto !== false; if (!SRC.auto && SRC_TEXT[d.mode]) SRC.mode = d.mode; } } catch(_){}
+function dataFresh(){ return ws && ws.readyState === 1 && performance.now() - SRC.lastData < 2000; }
+function detectSource(){
+  if (!SRC.auto) return;
+  const m = !dataFresh() ? "standalone" : (SRC.simulation === false ? "twin" : "replacement");
+  if (m !== SRC.mode) setSource(m, true);
+}
+function setSource(mode, fromAuto = false){
+  if (!SRC_TEXT[mode]) return;
+  const prev = SRC.mode;
+  SRC.mode = mode;
+  if (!fromAuto) try { localStorage.setItem("biegbert.source", JSON.stringify({ mode, auto:SRC.auto })); } catch(_){}
+  const sa = mode === "standalone";
+  if (!sa && prev === "standalone"){ SRC.coupleSaved = test.coupleA; test.playing = false; test.coupleA = false; }
+  if (sa && prev !== "standalone"){ test.coupleA = SRC.coupleSaved; $("tCouple").checked = test.coupleA; }
+  for (const a of AXES){ const ui = axisUI[a.id]; ui.range.disabled = ui.num.disabled = !sa; ui.box.classList.toggle("locked", !sa); }
+  $("reset").disabled = !sa;
+  document.querySelectorAll("#srcSeg button").forEach(b => b.classList.toggle("on", b.dataset.s === mode));
+  $("srcText").textContent = SRC_TEXT[mode] + (!sa && !dataFresh() ? " Warte auf Daten vom Backend …" : "");
+  $("srcLive").style.display = sa ? "none" : "";
+  if (!sa && SRC.act) setAxes(SRC.act, "ext");
+  updateTestUI(); updateProcess();
+}
+document.querySelectorAll("#srcSeg button").forEach(b => b.onclick = () => {
+  SRC.auto = false; $("srcAuto").checked = false; setSource(b.dataset.s);
+});
+$("srcAuto").checked = SRC.auto;
+$("srcAuto").onchange = e => { SRC.auto = e.target.checked; try { localStorage.setItem("biegbert.source", JSON.stringify({ mode:SRC.mode, auto:SRC.auto })); } catch(_){} detectSource(); };
+setInterval(() => { detectSource(); if (SRC.mode !== "standalone" && !dataFresh()) $("srcText").textContent = SRC_TEXT[SRC.mode] + " Warte auf Daten vom Backend …"; }, 500);
+
+/** Daten vom Backend: {"type":"axes","values":{…},"set":{…},"process":{…}} */
+function onBackendAxes(m){
+  SRC.lastData = performance.now();
+  SRC.act = m.values || null;
+  if (m.set) SRC.set = m.set;
+  if (m.process){ SRC.process = m.process; if (typeof m.process.simulation === "boolean") SRC.simulation = m.process.simulation; }
+  detectSource();
+  if (SRC.mode === "standalone"){
+    if (!SRC.ignoredNote){ SRC.ignoredNote = true; console.info("Biegbert: Daten vom Backend werden ignoriert (Betriebsart Eigenständig)"); }
+    return;
+  }
+  setAxes(m.values, "ext");
+  autoTube();
+  renderLive();
+}
+function autoTube(){
+  const p = SRC.process; if (!p) return;
+  const step = p.step_g2 || 0;
+  if ($("tAuto").checked){
+    // neues Rohr: Ablauf startet ohne Rohr, oder das alte Teil wurde entnommen (Z1 zurückgefahren).
+    // Im zweiten Fall erst ab S21 (Klemmen), dann steht Z1 auf der Startposition des Plans.
+    if (!test.active && SRC.lastStep === 0 && step >= 20 && step < 24) testStart();
+    else if (test.active && test.stale && step >= 21 && step < 23) testStart();
+  }
+  SRC.lastStep = step;
+}
+function renderLive(){
+  const p = SRC.process || {};
+  $("srcKv").innerHTML = `<div>Quelle</div><div>${p.plc_kind === "sim" ? "SPS-Simulation (Backend)" : "TwinCAT"}${p.simulation ? " · simuliert" : " · real"}</div>
+    <div>Betriebsart</div><div>${p.mode || "–"}</div><div>Kinematik</div><div>${p.kin || "–"}${p.plan_id ? " · Plan " + p.plan_id : ""}</div>
+    <div>Ablauf</div><div>${p.step_g2_text || "–"}</div>`;
+  if (!SRC.set || !SRC.act){ $("devTable").innerHTML = ""; return; }
+  let rows = "";
+  for (const id of ["Z1","Z2","X","A","W"]){
+    const s = SRC.set[id], a = SRC.act[id]; if (s === undefined || a === undefined) continue;
+    let d = s - a; if (id === "W") d = ((d + 540) % 360) - 180;
+    rows += `<tr><td>${id}</td><td>${(+s).toFixed(2)}</td><td>${(+a).toFixed(2)}</td><td class="${Math.abs(d) > DEV_TOL[id] ? "big" : ""}">${d.toFixed(3)}</td></tr>`;
+  }
+  $("devTable").innerHTML = `<tr><th>Achse</th><th>Soll</th><th>Ist</th><th>Δ</th></tr>${rows}`;
+}
+
+/* ════════════════════════════════════════════════════════════════════
+   BIEGETEIL-ANSICHT
+   ════════════════════════════════════════════════════════════════════ */
+const partEl = $("part");
+Object.assign(pv, { renderer:null, scene:null, camera:null, ctl:null, group:null, meshes:[], part:null, hi:-1 });
+// Farben: Bögen nacheinander aus der Palette, Geraden neutral
+const BEND_COLORS = [0xe0a458, 0x5fbf77, 0xd9675a, 0xa98be0, 0x4fc1c9, 0xe07fb0, 0xc9c95a, 0x6f9be8];
+const STRAIGHT_COLOR = 0x8a9bab;
+function initPartView(){
+  if (pv.renderer) return;
+  pv.renderer = makeRenderer();
+  $("partCanvas").appendChild(pv.renderer.domElement);
+  pv.renderer.domElement.style.cssText = "display:block;width:100%;height:100%";
+  pv.scene = new THREE.Scene(); pv.scene.background = new THREE.Color();
+  pv.camera = new THREE.PerspectiveCamera(35, 1, 1, 20000);
+  addLights(pv.scene, pv.camera);
+  pv.group = new THREE.Group(); pv.scene.add(pv.group);
+  pv.grid = new THREE.Group(); pv.scene.add(pv.grid);
+  applyTheme(theme);
+  pv.axes = new THREE.AxesHelper(60); pv.scene.add(pv.axes);
+  const el2 = pv.renderer.domElement, ray2 = new THREE.Raycaster(), m2 = new THREE.Vector2();
+  pv.ctl = createOrbit(el2, pv.camera, {
+    onHover: e => {
+      const r = el2.getBoundingClientRect();
+      m2.set(((e.clientX-r.left)/r.width)*2-1, -((e.clientY-r.top)/r.height)*2+1);
+      ray2.setFromCamera(m2, pv.camera);
+      const h = ray2.intersectObjects(pv.meshes, false)[0];
+      highlightSeg(h ? h.object.userData.seg : -1, true);
+      el2.style.cursor = h ? "pointer" : "";
+    },
+    onLeave: () => highlightSeg(-1),
+  });
+}
+function resizePart(){
+  if (!pv.renderer) return;
+  const w = partEl.clientWidth, h = partEl.clientHeight;
+  pv.renderer.setSize(w, h, false); pv.camera.aspect = w / h;
+  // Bildmitte um die halbe Infotafel nach rechts verschieben, damit das Teil frei liegt
+  const panel = $("partInfo").offsetWidth + 12;
+  pv.camera.setViewOffset(w, h, -panel / 2, 0, w, h);
+  pv.camera.updateProjectionMatrix();
+}
+function partBox(){ const b = new THREE.Box3(); for (const m of pv.meshes) b.union(m.geometry.boundingBox); return b; }
+function fitPart(){ pv.ctl.fit(partBox(), 0.6, 1.05); pv.ctl.radius *= 1.25; pv.ctl.update(); }
+function segColor(part, i){
+  if (part.segments[i].type !== "Bogen") return STRAIGHT_COLOR;
+  const k = part.segments.slice(0, i).filter(s => s.type === "Bogen").length;
+  return BEND_COLORS[k % BEND_COLORS.length];
+}
+/** Segment i hervorheben (−1 = keins). Übrige Segmente werden abgedunkelt. */
+function highlightSeg(i, fromView = false){
+  if (i === pv.hi) return;
+  pv.hi = i;
+  pv.meshes.forEach((m, k) => {
+    const on = k === i, mat = m.material, base = m.userData.color;
+    const dim = i >= 0 && !on;
+    mat.color.copy(base);
+    mat.transparent = dim; mat.opacity = dim ? 0.22 : 1; mat.depthWrite = !dim; mat.needsUpdate = true;
+    mat.emissive.copy(on ? base : new THREE.Color(0)).multiplyScalar(on ? 0.5 : 0);
+  });
+  document.querySelectorAll("#partInfo tr[data-i]").forEach(tr => tr.classList.toggle("hi", +tr.dataset.i === i));
+  if (fromView && i >= 0){ const tr = document.querySelector(`#partInfo tr[data-i="${i}"]`); tr && tr.scrollIntoView({ block:"nearest" }); }
+}
+function showPart(part){
+  initPartView(); pv.part = part; pv.hi = -1;
+  partEl.style.display = "block";
+  // alte Segment-Netze entfernen
+  for (const m of pv.meshes){ m.geometry.dispose(); m.material.dispose(); pv.group.remove(m); }
+  pv.meshes = part.segRings.map((r, i) => {
+    const col = new THREE.Color(segColor(part, i)).convertSRGBToLinear();
+    const mat = new THREE.MeshStandardMaterial({ color:col.clone(), metalness:.3, roughness:.42, side:THREE.DoubleSide, emissive:0x000000 });
+    const m = makeTubeMesh(Math.max(2, r.length), mat);
+    writeRings(m, r); m.userData = { seg:i, color:col };
+    pv.group.add(m); return m;
+  });
+  const bb = partBox();
+  pv.grid.position.set((bb.min.x+bb.max.x)/2, bb.min.y - 20, (bb.min.z+bb.max.z)/2);
+  const size = bb.getSize(new V3());
+  const nBends = part.segments.filter(s => s.type === "Bogen").length;
+  const sw = i => `<span class="sw" style="background:#${new THREE.Color(segColor(part, i)).getHexString()}"></span>`;
+  const rows = part.segments.map((s, i) => s.type === "Gerade"
+    ? `<tr data-i="${i}"><td>${sw(i)}${i+1}</td><td>Gerade</td><td class="n">${s.length.toFixed(1)}</td><td class="n">–</td><td class="n">–</td><td class="n">–</td></tr>`
+    : `<tr data-i="${i}"><td>${sw(i)}${i+1}</td><td>Bogen</td><td class="n">${s.length.toFixed(1)}</td><td class="n">${Math.abs(s.r_max - s.r_min) < 0.05 ? s.r_min.toFixed(1) : s.r_min.toFixed(1) + "–" + s.r_max.toFixed(1)}</td><td class="n">${s.angle_deg.toFixed(1)}</td><td class="n">${s.plane_deg.toFixed(0)}</td></tr>`).join("");
+  $("partInfo").innerHTML = `<h3>Biegeteil</h3>
+    <div class="hint" style="margin-top:0">Ideale Geometrie nach [Eberle], ohne Rückfederung.</div>
+    <div class="kv" style="margin-top:10px">
+      <div>Rohr</div><div>Ø ${TUBE_D} mm</div>
+      <div>Gestreckte Länge</div><div>${part.length.toFixed(1)} mm</div>
+      <div>Bögen</div><div>${nBends}</div>
+      <div>Hüllmaße</div><div>${size.x.toFixed(0)} × ${size.y.toFixed(0)} × ${size.z.toFixed(0)} mm</div>
+    </div>
+    <table><tr><th>#</th><th>Typ</th><th>L [mm]</th><th>R [mm]</th><th>∠ [°]</th><th>Ebene [°]</th></tr>${rows}</table>
+    <div class="hint">Reihenfolge vom Rohrende (Anschlag) zur Spitze. Ebene: Drehung der Biegeebene relativ zum ersten Bogen.
+      Zeile oder Rohrabschnitt mit der Maus berühren, um ihn hervorzuheben.</div>`;
+  document.querySelectorAll("#partInfo tr[data-i]").forEach(tr => {
+    tr.onmouseenter = () => highlightSeg(+tr.dataset.i);
+    tr.onmouseleave = () => highlightSeg(-1);
+  });
+  resizePart(); fitPart();
+}
+function closePart(sendEvt = true){
+  if (partEl.style.display !== "block") return;
+  partEl.style.display = "none";
+  if (sendEvt) wsSend({ type:"test", event:"closed" });
+}
+$("partClose").onclick = () => closePart();
+$("partNew").onclick = () => { closePart(); testStart(); };
+$("partFit").onclick = fitPart;
+
+// ── WebSocket ────────────────────────────────────────────────────────
+const params = new URLSearchParams(location.search);
+const defaultWs = params.get("ws") ||
+  (location.protocol.startsWith("http") ? `${location.protocol === "https:" ? "wss" : "ws"}://${location.hostname}:8765/` : "ws://localhost:8765/");
+const wsUrl = $("wsUrl"), wsDot = $("wsDot"), wsText = $("wsText");
+wsUrl.value = defaultWs;
+let ws = null, wsRetry = 1000, wsTimer = null;
+function wsStatus(cls, txt){ wsDot.className = "dot " + cls; wsText.textContent = txt; }
+function wsConnect(){
+  clearTimeout(wsTimer); if (ws){ ws.onclose = null; try{ ws.close(); }catch(_){} }
+  wsStatus("wait", "Verbinde …");
+  try { ws = new WebSocket(wsUrl.value.trim()); } catch(e){ wsStatus("", "Ungültige Adresse"); return; }
+  ws.onopen = () => {
+    wsRetry = 1000; wsStatus("ok", "Verbunden mit dem Backend");
+    wsSend({ type:"hello", axes:Object.fromEntries(AXES.map(a=>[a.id,{min:a.min,max:a.max,unit:a.unit,prov:a.prov}])), values:getAxes() });
+  };
+  ws.onmessage = ev => {
+    let m; try { m = JSON.parse(ev.data); } catch(_){ console.warn("Kein JSON:", ev.data); return; }
+    if (m.type === "detail") setDetailLevel(m.level);
+    else if (m.type === "axes") onBackendAxes(m);
+    else if (m.type === "test") testCmd(m);
+    else if (!m.type) onBackendAxes({ values:m });
+  };
+  ws.onclose = () => {
+    wsStatus("", `Nicht verbunden – neuer Versuch in ${Math.round(wsRetry/1000)} s`);
+    wsTimer = setTimeout(wsConnect, wsRetry); wsRetry = Math.min(10000, wsRetry * 1.6);
+  };
+  ws.onerror = () => {};
+}
+function testCmd(m){
+  switch (m.cmd){
+    case "start": testStart(); break;
+    case "play": testPlay(); break;
+    case "pause": testPause(); break;
+    case "stop": testStop(); break;
+    case "close": closePart(); break;
+    case "speed": setSpeed(m.value); break;
+    case "coupleA": setCoupleA(m.value); break;
+    default: console.warn("Unbekanntes Versuchskommando:", m.cmd);
+  }
+}
+function wsSend(o){ if (ws && ws.readyState === 1) ws.send(JSON.stringify(o)); }
+$("wsBtn").onclick = () => { wsRetry = 1000; wsConnect(); };
+wsUrl.addEventListener("change", () => { wsRetry = 1000; wsConnect(); });
+
+// ── Öffentliche API ──────────────────────────────────────────────────
+const api = window.biegbert = {
+  setAxes: (o) => setAxes(o, "ext"), setAxis: (id, v) => setAxes({ [id]: v }, "ext"),
+  getAxes, setDetailLevel, setView, setTheme: applyTheme, axes: AXES, onUserChange: null,
+  setSource: (m) => { SRC.auto = false; $("srcAuto").checked = false; setSource(m); },
+  getSource: () => ({ mode:SRC.mode, auto:SRC.auto, dataFresh:dataFresh() }),
+  test: { start:testStart, play:testPlay, pause:testPause, stop:testStop, close:closePart,
+          setSpeed, setCoupleA, bendZone,
+          getPart: () => test.active ? computePart() : (pv.part || null),
+          state: () => ({ active:test.active, playing:test.playing, speed:test.speed, coupleA:test.coupleA,
+                          length:test.L, sigmaDie:test.sigmaD, z1Max:z1Max() }) },
+  scene, camera, nodes,
+};
+
+// ── Start ────────────────────────────────────────────────────────────
+function resize(){
+  const w = view.clientWidth, h = view.clientHeight;
+  renderer.setSize(w, h, false); camera.aspect = w / h; camera.updateProjectionMatrix();
+  if (partEl.style.display === "block") resizePart();
+}
+window.addEventListener("resize", resize); resize();
+applyTheme(theme);
+for (const a of AXES) applyAxis(a);
+setAxes(getAxes(), "api");
+setDetailLevel(2);
+setView("iso");
+setSource(SRC.mode, true);
+wsConnect();
+
+let frames = 0, t0 = performance.now(), tLast = performance.now();
+const fpsEl = $("iFps");
+(function loop(){
+  requestAnimationFrame(loop);
+  const t = performance.now(), dt = Math.min(0.1, (t - tLast) / 1000); tLast = t;
+  testFeed(dt);
+  if (partEl.style.display === "block") pv.renderer.render(pv.scene, pv.camera);
+  else renderer.render(scene, camera);
+  frames++; if (t - t0 > 1000){ fpsEl.textContent = Math.round(frames*1000/(t-t0)) + " fps"; frames = 0; t0 = t; }
+})();
+})();
+</script>
+</body>
+</html>

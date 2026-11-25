@@ -12,3 +12,14 @@ dafür ist nötig:
 
 infos liegen in docs/umgebung.txt
 
+
+## HMI und Backend starten
+
+```powershell
+.\.venv\Scripts\Activate.ps1
+cd backend
+python -m biegbert            # mit SPS-Simulation; --plc ads --ams <AMS-Net-ID> für die echte SPS
+```
+
+Dann im Browser `http://localhost:8765/` (HMI) und `http://localhost:8765/vis/` (3D-Visualisierung).
+Details: `docs/hmi-backend.md`. Tests: `pytest` im Wurzelordner.

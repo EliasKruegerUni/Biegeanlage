@@ -17,7 +17,7 @@ Der aktuelle Rumpf bewegt keine Achsen und enthält keine Camming-Bausteine.
 | `Start()` | `BOOL` | An der aktuellen Masterposition koppeln, Master starten | `Loaded` |
 | `Hold()` | `BOOL` | Master gesteuert anhalten | `Running` |
 | `Resume()` | `BOOL` | Master fortsetzen | `Held` |
-| `Abort()` | `BOOL` | Stoppen, entkoppeln | `Coupling`, `Running`, `Holding`, `Held` |
+| `Abort()` | `BOOL` | Master stoppen, im Stillstand entkoppeln | `Coupling`, `Running`, `Holding`, `Held` |
 | `Reset()` | `BOOL` | Fehler quittieren, Plan bleibt erhalten | `Fault` |
 | `GetStatus()` | `ST_KinStatus` | Status lesen | immer |
 
@@ -71,13 +71,37 @@ Bei zu großer Abweichung wird `KinPositionDeviation` gesetzt. Eine automatische
 
 `Reset()` behält den Plan, damit das Programm am unterbrochenen Schritt fortgesetzt werden kann (S2). `Start()` koppelt dann an der aktuellen Masterposition. Ob die NC das nach STO genau so erlaubt, wird in Phase 8 geprüft.
 
-## Prüfungen in Phase 8
+## Ergebnisse der NC-Tests
 
-- Wie reagiert der Master auf einen Slave-Fehler in der NC?
-- Wie groß darf eine Cam-Tabelle sein, und wie wird sie zur Laufzeit geladen?
-- Bleibt die Kopplung bei `Hold()` ruckfrei und ohne Sprung beim Wiederanlauf?
-- Wie wird der Vorschub-Override auf den Master angewendet?
-- Sind die Spitzenwerte der Slaves auch beim Anhalten des Masters zulässig?
+Stand: 05.11.2026. Simulation mit Z1 als Master, X als Slave, Tabelle mit Masterweg 0 bis 120 mm und X bis 7 mm. Die Ergebnisse gelten nur für diese Simulation und den geprüften Fall.
+
+| Test | Ergebnis |
+|---|---|
+| Tabelle laden | 10000 Zeilen fehlerfrei, unter 1 s. Das Maximum der NC wurde nicht bestimmt. |
+| Normallauf | X folgt dem Plan: X 5,25 mm/s bei Vorgabe 30 mm/s für Z1, größter Schritt 0,05 mm pro SPS-Zyklus |
+| Halt und Fortsetzen | Fortsetzen über neuen Fahrbefehl, kein Sprung, kein Fehler |
+| Override | Override von Z1 wirkt über die Kopplung auf X, X bleibt synchron |
+| Harter Halt bei Z1 ≈ 20 mm | `Deceleration` 500: keine höheren Spitzenwerte, kein Fehler |
+| Freigabe von X im Lauf entzogen | Fehler `0x4260`, Z1 stoppt von selbst nach etwa 6 mm. X stand dabei im Plateau. |
+| Entkoppeln im Lauf | X läuft mit konstanter Geschwindigkeit weiter, im Test bis 170 mm |
+| Tabelle im gekoppelten Zustand laden | Abgelehnt mit `0x4a26` |
+| Wiederanlauf mit Abweichung | Nur Kopplung geprüft: X koppelte bei 10 mm statt 7 mm ohne Fehler und Sprung. Das Weiterfahren ist **nicht geklärt**. |
+
+## Vorgaben für FB_BendKinematics
+
+- `Abort()` stoppt zuerst den Master und entkoppelt erst im Stillstand. Nach `MC_CamOut` wird der Slave zusätzlich gestoppt.
+- `LoadPlan()` lädt nur im entkoppelten Zustand.
+- `Cyclic()` überwacht in jedem Zyklus den Fehlercode aller Achsen in `NcToPlc`. Bausteinausgänge reichen nicht: Beim Freigabetest zeigten `MC_CamIn` und `MC_Power` keinen Fehler.
+- `Resume()` wartet auf den Stillstand und gibt einen neuen Fahrbefehl an den Master.
+- Befehle an Z1 kommen nur, wenn kein anderer Auftrag läuft.
+- Aufrufe von `MC_CamIn` warten auf `Done` von `MC_CamTableSelect`.
+
+## Noch zu prüfen
+
+- Wiederanlauf mit abweichendem Slave: Folgt der Slave dem Plan, mit Versatz oder gar nicht?
+- Wiederanlauf nach Fehler mit `MC_Reset` und neuer Kopplung, auch mit `MC_CamInfo`
+- Fehler des Slaves in einer Rampe: Wie groß wird die Abweichung beim Stoppen?
+- Verhalten nach echtem STO an der Anlage
 
 ## Biegeplan
 

@@ -1,0 +1,259 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<title>Biegbert HMI</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="data:,">
+<link rel="stylesheet" href="style.css">
+<script>
+  // Theme vor dem ersten Zeichnen setzen (kein Aufblitzen)
+  try { const t = localStorage.getItem("biegbert.theme"); document.documentElement.dataset.theme =
+    t || (matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark"); } catch (_) {}
+</script>
+</head>
+<body>
+<header id="top">
+  <div class="brand"><b>Biegbert</b><span>HMI</span></div>
+  <div class="pills">
+    <span class="pill" id="pBackend" title="WebSocket zum Python-Backend"><i></i>Backend</span>
+    <span class="pill" id="pPlc" title="Verbindung Backend ↔ SPS (GVL_HMI)"><i></i>SPS</span>
+    <span class="pill" id="pHb" title="SPS sieht den Heartbeat der Bedienung (bHmiAlive)"><i></i>Heartbeat</span>
+    <span class="pill warn" id="pSim" hidden>Simulation</span>
+    <span class="pill bad" id="pEstop" hidden>NOT-HALT</span>
+  </div>
+  <div class="modebox">
+    <div class="mode" id="mode">–</div>
+    <div class="sub" id="modeSub">–</div>
+  </div>
+  <div class="actions">
+    <button id="bPause" title="Automatik → Pause (ModePause)">Pause</button>
+    <button id="bResume" class="two" data-c1="ModeResume1" data-c2="ModeResume2" title="Pause → Automatik, zweistufig">Fortsetzen</button>
+    <button id="bSingle" class="two" data-c1="ModeSingleAxis1" data-c2="ModeSingleAxis2" title="Pause → Einzelachsbetrieb, zweistufig">Einzelachsen</button>
+    <button id="bBase" title="Einzelachsen → Automatik, nur in Grundstellung (ModeReturnToBase)">Grundstellung → Automatik</button>
+    <button id="bAck" title="Alle Alarme quittieren (AlarmAck 0)">Quittieren</button>
+    <a class="btnlink" href="/vis/" target="biegbert-vis" title="3D-Visualisierung mit Istwerten">3D-Ansicht ↗</a>
+    <button id="bTheme" title="Hell/Dunkel">☀</button>
+  </div>
+</header>
+
+<main>
+  <section id="work">
+    <nav class="tabs">
+      <button data-tab="plan" class="on">1 · Biegeplan</button>
+      <button data-tab="semi">2 · Halbautomatisch</button>
+      <button data-tab="manual">3 · Manuell</button>
+      <button data-tab="param">Parameter</button>
+    </nav>
+
+    <!-- 1 Biegeplan ───────────────────────────────────────────── -->
+    <div class="tab on" id="tab-plan">
+      <div class="row wrap">
+        <div class="card grow">
+          <h3>Plan laden</h3>
+          <label class="drop" id="drop">
+            <input type="file" id="file" accept=".json,.lra,.ybc,.csv,.txt,.step,.stp">
+            <span>Datei hierher ziehen oder klicken<br><small>biegbert-geo (JSON) · Maschinenplan (JSON, Format 1) · LRA/YBC · STEP (folgt)</small></span>
+          </label>
+          <div class="row"><label>Radius für LRA ohne CLR <input type="number" id="lraR" value="45" step="0.1"> mm</label></div>
+        </div>
+        <div class="card grow">
+          <h3>Pläne</h3>
+          <div class="tablewrap short"><table id="planList"><thead><tr><th>#</th><th>Name</th><th>Art</th><th>Länge</th><th>Bögen</th><th></th></tr></thead><tbody></tbody></table></div>
+        </div>
+      </div>
+      <div id="planDetail" class="card" hidden>
+        <div class="row between"><h3 id="pdTitle">Plan</h3>
+          <div class="row"><button id="pdJsonGeo">Geo-Plan ↓</button><button id="pdJsonMachine">Maschinenplan ↓</button></div></div>
+        <div class="kv4" id="pdSummary"></div>
+        <ul class="msgs" id="pdMsgs"></ul>
+        <div class="steps" id="pdSteps">
+          <button id="pdLoad" class="primary">① An SPS übertragen</button>
+          <button id="pdMat">② Material bestätigen</button>
+          <button id="pdStart" class="primary">③ Start</button>
+          <button id="pdQ1">Ende bestätigen (Q1)</button>
+          <span class="hint" id="pdHint"></span>
+        </div>
+        <div class="row wrap top">
+          <div class="grow">
+            <h4>Verlauf u(s) und φ(s)</h4>
+            <canvas id="pdProfile" class="chart"></canvas>
+          </div>
+          <div class="grow">
+            <h4>Vorschau Biegeteil <small>(ziehen zum Drehen)</small></h4>
+            <canvas id="pdPreview" class="chart"></canvas>
+          </div>
+        </div>
+        <div class="row wrap top">
+          <div class="grow"><h4>Elemente</h4><div class="tablewrap"><table id="pdElements"></table></div></div>
+          <div class="grow"><h4>Maschinenplan (an die SPS)</h4><div class="tablewrap"><table id="pdMachine"></table></div></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 2 Halbautomatisch ───────────────────────────────────────── -->
+    <div class="tab" id="tab-semi">
+      <div class="row wrap top">
+        <div class="card">
+          <h3>Biegung eingeben</h3>
+          <div class="seg" id="elType">
+            <button data-t="straight" class="on">Gerade</button><button data-t="bend">Bogen</button>
+            <button data-t="bend_var">Bogen veränderlich</button><button data-t="rotation">Rotation</button>
+          </div>
+          <div class="form" id="elForm"></div>
+          <div class="calc" id="elCalc"></div>
+          <div class="row"><button id="elAdd" class="primary">Hinzufügen</button></div>
+        </div>
+        <div class="card">
+          <h3>Prozess und Material</h3>
+          <div class="form two">
+            <label>Z2 <input type="number" id="prZ2" value="0" step="0.1"><em>mm</em></label>
+            <label>v <output id="prV">24.0</output><em>mm</em></label>
+            <label>Vorschub <input type="number" id="prFeed" value="30" step="1"><em>mm/s</em></label>
+            <label>Übergang <input type="number" id="prTrans" value="30" step="1"><em>mm</em></label>
+            <label>A-Faktor <input type="number" id="prAf" value="1" step="0.05"><em>·φ</em></label>
+            <label>Ø <input type="number" id="maD" value="15" step="0.1"><em>mm</em></label>
+            <label>Wand <input type="number" id="maW" value="2" step="0.1"><em>mm</em></label>
+            <label>Rp0,2 <input type="number" id="maY" value="300" step="10"><em>MPa</em></label>
+            <label>Kraftgrenze <input type="number" id="maF" value="16000" step="100"><em>N</em></label>
+          </div>
+          <p class="hint">Übergang = Länge, über die beim An- und Rückbiegen u linear verändert wird (vorläufig). Kurze Übergänge zwingen wegen X ≤ 3,5 mm/s zu langsamem Vorschub.</p>
+        </div>
+      </div>
+      <div class="card">
+        <div class="row between">
+          <h3>Abfolge</h3>
+          <div class="row">
+            <button id="seqSave">Speichern ↓</button>
+            <label class="btn">Laden <input type="file" id="seqLoad" accept=".json" hidden></label>
+            <button id="seqClear">Leeren</button>
+          </div>
+        </div>
+        <div class="tablewrap"><table id="seqTable"></table></div>
+        <div class="row wrap">
+          <div class="seg" id="seqMode"><button data-m="all" class="on">Als Folge</button><button data-m="step">Schritt für Schritt</button></div>
+          <span id="seqAll"><button id="seqBuild" class="primary">Plan erzeugen → Biegeplan</button></span>
+          <span id="seqStep" hidden>
+            <button id="seqNext" class="primary">Nächsten Schritt ausführen</button>
+            <button id="seqReset">Status zurücksetzen</button>
+          </span>
+          <span class="hint" id="seqHint"></span>
+        </div>
+        <p class="hint">„Als Folge“ erzeugt einen vollständigen Biegeplan und öffnet ihn unter 1 · Biegeplan. „Schritt für Schritt“ führt jeweils das nächste Element ab der aktuellen Z1-Position aus (Rotationen werden mit dem folgenden Element ausgeführt). Ausführung erfordert die Betriebsart Automatik.</p>
+      </div>
+    </div>
+
+    <!-- 3 Manuell ──────────────────────────────────────────────── -->
+    <div class="tab" id="tab-manual">
+      <div class="banner" id="manBanner">Einzelbewegungen sind nur in der Betriebsart <b>Einzelachsen</b> möglich. Wechsel: Pause → „Einzelachsen“ (zweistufig).</div>
+      <div class="row wrap">
+        <label>Tippgeschwindigkeit <input type="range" id="jogF" min="1" max="100" value="30"> <output id="jogFv">30 %</output></label>
+        <button id="enAll">Alle Achsen freigeben</button>
+        <button id="haltAll">Alle anhalten</button>
+      </div>
+      <div class="axes" id="axisCards"></div>
+      <div class="row wrap top">
+        <div class="card grow">
+          <h3>Vorschub</h3>
+          <div class="form two">
+            <label>Ende Z1 <input type="number" id="feedEnd" step="1"><em>mm</em></label>
+            <label>Geschw. <input type="number" id="feedV" value="10" step="1"><em>mm/s</em></label>
+          </div>
+          <div class="row"><button id="feedGo" class="primary">Vorschub starten</button><button id="feedStop" class="danger">Vorschub stoppen</button></div>
+          <p class="hint" id="feedHint"></p>
+        </div>
+        <div class="card grow">
+          <h3>Matrize</h3>
+          <div class="kv" id="dieKv"></div>
+          <div class="row"><button id="aTan">A tangential zu X setzen</button></div>
+          <p class="hint">Veränderlicher Radius: X während des laufenden Vorschubs verstellen (Tippen oder Fahrbefehl).</p>
+        </div>
+        <div class="card grow">
+          <h3>Niederhalter</h3>
+          <div class="clamps" id="clampCards"></div>
+          <div class="row"><button id="clOpenAll">Alle öffnen</button><button id="clCloseFree">Freie schließen</button></div>
+        </div>
+      </div>
+      <div class="card" id="simCard" hidden>
+        <h3>Simulation <small>(nur bSimulation)</small></h3>
+        <div class="row wrap">
+          <button data-fault="1">Achsfehler Z1</button><button data-fault="2">Achsfehler X</button>
+          <button data-fault="3">Achsfehler A</button><button data-fault="6">Schleppfehler Z1</button>
+          <button data-fault="4">Druckabfall</button><button data-input="1:1">Druck wieder ok</button>
+          <button data-fault="5" class="danger">Not-Halt auslösen</button><button data-input="2:0">Not-Halt lösen</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Parameter ──────────────────────────────────────────────── -->
+    <div class="tab" id="tab-param">
+      <div class="row wrap top">
+        <div class="card">
+          <h3>Parametersatz (stParam)</h3>
+          <div class="form two">
+            <label>Plan-ID <input type="number" id="paPlan" value="0"></label><span></span>
+            <label>Ø <input type="number" id="paD" value="15" step="0.1"><em>mm</em></label>
+            <label>Wand <input type="number" id="paW" value="2" step="0.1"><em>mm</em></label>
+            <label>Rp0,2 <input type="number" id="paY" value="300"><em>MPa</em></label>
+            <label>Kraftgrenze Z1 <input type="number" id="paF" value="16000"><em>N</em></label>
+            <label>Vorschub-Override <input type="number" id="paFo" value="100" min="0" max="100"><em>%</em></label>
+            <label>Einzelachs-Geschw. <input type="number" id="paSv" value="100" min="1" max="100"><em>%</em></label>
+          </div>
+          <div class="row"><button id="paApply" class="primary">Übernehmen (ParamApply)</button></div>
+          <p class="hint">Die SPS prüft den Satz und kopiert ihn nach stParamActive. Nur die aktive Kopie wirkt. Kraftgrenze wird auf 25 kN begrenzt.</p>
+        </div>
+        <div class="card">
+          <h3>Aktiv in der SPS</h3>
+          <div class="kv" id="paActive"></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <aside id="side">
+    <div class="card">
+      <h3>Achsen</h3>
+      <table class="tele" id="teleAxes"></table>
+    </div>
+    <div class="card">
+      <h3>Niederhalter <small id="pressure"></small></h3>
+      <div class="clampbar" id="teleClamps"></div>
+    </div>
+    <div class="card">
+      <h3>Ablauf</h3>
+      <div class="kv" id="teleSeq"></div>
+      <div class="missing" id="teleBase"></div>
+    </div>
+    <div class="card">
+      <div class="row between"><h3>Alarme <small id="alarmCount"></small></h3><button id="bAck2" class="small">Quittieren</button></div>
+      <ul class="alarms" id="alarmList"></ul>
+    </div>
+    <div class="card">
+      <div class="row between"><h3>Verlauf</h3>
+        <div class="row"><select id="trA"></select><select id="trB"></select></div></div>
+      <canvas id="trend" class="chart small"></canvas>
+    </div>
+  </aside>
+</main>
+
+<footer id="console">
+  <div class="ctool">
+    <b>Konsole</b>
+    <label><input type="checkbox" data-lv="debug"> Debug</label>
+    <label><input type="checkbox" data-lv="info" checked> Info</label>
+    <label><input type="checkbox" data-lv="warning" checked> Warnung</label>
+    <label><input type="checkbox" data-lv="error" checked> Fehler</label>
+    <input id="cFilter" placeholder="Filter (Quelle oder Text)">
+    <label><input type="checkbox" id="cFollow" checked> Mitlaufen</label>
+    <button id="cClear" class="small">Leeren</button>
+    <span class="grow"></span>
+    <span id="cLatency" class="dim"></span>
+  </div>
+  <div id="clog"></div>
+  <div class="cin"><span>›</span><input id="cIn" placeholder="Befehl an das Backend, z. B. help · status · cmd AxisEnable axis=X · fault 2" autocomplete="off" spellcheck="false"></div>
+</footer>
+
+<div id="toast"></div>
+<script src="app.js"></script>
+</body>
+</html>

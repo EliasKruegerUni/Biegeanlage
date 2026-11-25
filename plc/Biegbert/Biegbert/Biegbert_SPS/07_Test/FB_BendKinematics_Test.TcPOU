@@ -1,0 +1,66 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<TcPlcObject Version="1.1.0.1">
+  <POU Name="FB_BendKinematics_Test" Id="{7dc5a076-8c65-4f2f-84c2-f5a4be16b850}" SpecialFunc="None">
+    <Declaration><![CDATA[FUNCTION_BLOCK FB_BendKinematics_Test EXTENDS TcUnit.FB_TestSuite
+VAR
+END_VAR]]></Declaration>
+    <Implementation>
+      <ST><![CDATA[StartWithoutPlanIsRejected();
+LoadPlanSetsLoaded();
+HoldAndResumeReturnToRunning();]]></ST>
+    </Implementation>
+    <Method Name="HoldAndResumeReturnToRunning" Id="{db8d9136-395f-41ac-8179-6ed04d92c1a0}">
+      <Declaration><![CDATA[METHOD HoldAndResumeReturnToRunning
+VAR
+    fbKin : FB_BendKinematics;
+    stStatus : ST_KinStatus;
+END_VAR]]></Declaration>
+      <Implementation>
+        <ST><![CDATA[TEST('HoldAndResumeReturnToRunning');
+fbKin.LoadPlan(nPlanId := 7);
+fbKin.Start();
+fbKin.Cyclic();
+fbKin.Hold();
+fbKin.Cyclic();
+fbKin.Resume();
+fbKin.Cyclic();
+stStatus := fbKin.GetStatus();
+AssertEquals_INT(Expected := TO_INT(E_KinState.Running),
+                 Actual := TO_INT(stStatus.eState),
+                 Message := 'Zustand muss Running sein');
+AssertEquals_INT(Expected := TO_INT(E_MotionMode.Coupled),
+                 Actual := TO_INT(stStatus.eMode),
+                 Message := 'Modus muss Coupled sein');
+TEST_FINISHED();]]></ST>
+      </Implementation>
+    </Method>
+    <Method Name="LoadPlanSetsLoaded" Id="{6b6e0ccd-2c8f-4075-afb9-9cf43b788e81}">
+      <Declaration><![CDATA[METHOD LoadPlanSetsLoaded
+VAR
+    fbKin : FB_BendKinematics;
+    stStatus : ST_KinStatus;
+END_VAR]]></Declaration>
+      <Implementation>
+        <ST><![CDATA[TEST('LoadPlanSetsLoaded');
+fbKin.LoadPlan(nPlanId := 7);
+stStatus := fbKin.GetStatus();
+AssertEquals_INT(Expected := TO_INT(E_KinState.Loaded),
+                 Actual := TO_INT(stStatus.eState),
+                 Message := 'Zustand muss Loaded sein');
+TEST_FINISHED();]]></ST>
+      </Implementation>
+    </Method>
+    <Method Name="StartWithoutPlanIsRejected" Id="{93c815ea-c4a0-4102-af9e-ade22748fd08}">
+      <Declaration><![CDATA[METHOD StartWithoutPlanIsRejected
+VAR
+    fbKin : FB_BendKinematics;
+END_VAR]]></Declaration>
+      <Implementation>
+        <ST><![CDATA[TEST('StartWithoutPlanIsRejected');
+AssertFalse(Condition := fbKin.Start(),
+            Message := 'Start ohne Plan muss abgelehnt werden');
+TEST_FINISHED();]]></ST>
+      </Implementation>
+    </Method>
+  </POU>
+</TcPlcObject>
