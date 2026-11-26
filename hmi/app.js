@@ -172,7 +172,7 @@ function renderHeader(st) {
   const m = $("mode"); m.textContent = MODE_TEXT[st.mode] || st.mode || "–";
   m.className = "mode " + ({ Automatic: "auto", Pause: "pause", SingleAxis: "single" }[st.mode] || "");
   const k = st.kin || {};
-  $("modeSub").textContent = `Kinematik ${k.state || "–"}${st.step_g2 ? " · " + st.step_g2_text : ""}${st.step_g3 ? " · " + st.step_g3_text : ""}`;
+  $("modeSub").textContent = `Kinematik ${k.state || "–"}${st.step_g2 && st.step_g2 !== 20 ? " · " + st.step_g2_text : ""}${st.step_g3 && st.step_g3 !== 30 ? " · " + st.step_g3_text : ""}`;
   $("bPause").disabled = !["Automatic", "ReturnToBase"].includes(st.mode);
   if (!$("bResume").classList.contains("armed")) $("bResume").disabled = st.mode !== "Pause";
   if (!$("bSingle").classList.contains("armed")) $("bSingle").disabled = st.mode !== "Pause";
@@ -318,22 +318,27 @@ $("pdLoad").onclick = async () => {
 $("pdMat").onclick = () => S.plan && cmd("MaterialConfirm", { value: S.plan.plan_id });
 $("pdStart").onclick = () => cmd("SeqStart");
 $("pdQ1").onclick = () => cmd("SeqConfirmQ1");
+$("pdQ2").onclick = () => cmd("SeqConfirmQ2");
+$("pdEnt").onclick = () => cmd("SeqPartRemoved");
 function renderPlanSteps(st) {
   if (!S.plan) return;
   const k = st.kin, loaded = k.plan_id === S.plan.plan_id && k.state !== "Idle";
   const matMissing = st.base_missing.includes("Material nicht bestätigt");
   $("pdLoad").disabled = !S.plan.machine || ["Coupling", "Running", "Holding", "Held"].includes(k.state);
   $("pdMat").disabled = !loaded || !matMissing;
-  $("pdStart").disabled = !loaded || matMissing || k.state !== "Loaded" || st.step_g2 !== 0;
+  $("pdStart").disabled = !loaded || matMissing || k.state !== "Loaded" || ![20, 27].includes(st.step_g2);
   $("pdQ1").hidden = st.step_g2 !== 24;
+  $("pdQ2").hidden = st.step_g2 !== 25;
+  $("pdEnt").hidden = st.step_g2 !== 27;
   const hints = [];
   if (st.mode !== "Automatic") hints.push("Start nur in Automatik");
   const notReady = AXES.filter(n => !st.axes[n].enabled || st.axes[n].error);
   if (notReady.length) hints.push(`nicht freigegeben/gestört: ${notReady.join(", ")}`);
   if (!S.plan.machine) hints.push("Plan enthält Fehler");
   else if (!loaded) hints.push(k.plan_id ? `SPS hat Plan ${k.plan_id} geladen` : "noch nicht übertragen");
-  if (st.step_g2) hints.push(st.step_g2_text);
-  if (st.simulation === false) hints.push("Planübergabe an die echte SPS folgt in Phase 9");
+  if (st.step_g2 === 20 && st.base_missing.some(b => /Null-Position|Niederhalter/.test(b)))
+    hints.push("erster Start nur aus der Grundstellung (alle Achsen 0, Niederhalter offen)");
+  if (st.step_g2 && st.step_g2 !== 20) hints.push(st.step_g2_text);
   $("pdHint").textContent = hints.join(" · ");
 }
 
@@ -525,10 +530,19 @@ $("seqNext").onclick = async () => {
   const idx = []; for (let i = i0; i <= i1; i++) idx.push(i);
   $("seqNext").disabled = true;
   try {
-    if (S.st.step_g2 === 24) {             // vorherigen Schritt abschließen: Niederhalter lösen, Biegekopf zurück
+    // vorherigen Schritt abschließen: Q1 (Niederhalter öffnen), Q2 (Biegekopf zurück) bis Übergabe S27
+    if (S.st.step_g2 === 24) {
       const q = await cmd("SeqConfirmQ1"); if (!q.ok) return;
-      if (!await waitFor(st => st.step_g2 === 0, 20000)) { toast("Vorheriger Schritt nicht abgeschlossen", "error"); return; }
+      if (!await waitFor(st => st.step_g2 === 25, 5000)) { toast("Q1 nicht übernommen", "error"); return; }
     }
+    if (S.st.step_g2 === 25) {
+      if (!await waitFor(st => st.clamps.every(c => c.state === "Open"), 10000)) { toast("Niederhalter öffnen nicht", "error"); return; }
+      const q = await cmd("SeqConfirmQ2"); if (!q.ok) return;
+    }
+    if (S.st.step_g2 >= 25 && S.st.step_g2 <= 27) {
+      if (!await waitFor(st => st.step_g2 === 27 && st.kin.state === "Loaded", 30000)) { toast("Vorheriger Schritt nicht abgeschlossen", "error"); return; }
+    }
+    if (![20, 27].includes(S.st.step_g2)) { toast(`Ablauf steht in ${S.st.step_g2_text}`, "warning"); return; }
     const r = await request({ type: "step.run", elements: idx.map(i => S.seq[i]), process: processParams(), material: materialParams() });
     if (r.plan) addPlan(r.plan);
     if (!r.ok) { idx.forEach(i => S.seqState[i] = "Fehler"); toast(r.text || "Schritt abgelehnt", "error"); }
@@ -540,9 +554,10 @@ $("seqNext").onclick = async () => {
 function checkSeqRun() {
   const r = S.seqRun, st = S.st; if (!r || !st) return;
   if (st.kin.plan_id !== r.plan) return;
-  if (st.step_g2 && st.step_g2 !== 24) r.seen = true;
+  if (st.step_g2 >= 21 && st.step_g2 <= 23) r.seen = true;
   if (st.kin.state === "Fault") { r.idx.forEach(i => S.seqState[i] = "Fehler"); S.seqRun = null; renderSeq(); }
-  else if (st.step_g2 === 24 || (r.seen && st.step_g2 === 0)) { r.idx.forEach(i => S.seqState[i] = "fertig"); S.seqRun = null; renderSeq(); }
+  else if (r.seen && st.step_g2 >= 24) { r.idx.forEach(i => S.seqState[i] = "fertig"); S.seqRun = null; renderSeq(); }
+  else if (r.seen && st.step_g2 === 20) { r.idx.forEach(i => S.seqState[i] = "Fehler"); S.seqRun = null; renderSeq(); }
 }
 
 // ── 3 Manuell ─────────────────────────────────────────────────────────

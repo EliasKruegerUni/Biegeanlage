@@ -1427,9 +1427,15 @@ External Setpoint Generation:
 	<Axis Id="1" CreateSymbols="true" AxisType="1">
 		<Name>__FILENAME__</Name>
 		<AxisPara>
+			<Dynamic AccelerationMaximum="200" DecelerationMaximum="200" Acceleration="200" Deceleration="200"/>
+			<Velo Maximum="50"/>
 			<OtherSettings AllowMotionCmdToSlave="true"/>
 		</AxisPara>
 		<Encoder Name="Enc" EncType="1">
+			<EncPara>
+				<SoftEndMinControl Enable="true" Range="-30"/>
+				<SoftEndMaxControl Enable="true" Range="1282"/>
+			</EncPara>
 			<Vars VarGrpType="1">
 				<Name>Eingänge</Name>
 				<Var>
@@ -1488,7 +1494,8 @@ External Setpoint Generation:
 		</Encoder>
 		<Drive Name="Drive" DrvType="5">
 			<DrvPara>
-				<Analog TorqueSetpointScale="10" ScaleFactorActTorque="0.1"/>
+				<Analog VeloReferenz="100" TorqueSetpointScale="10" ScaleFactorActTorque="0.1"/>
+				<TimeComp TaskDelayCycles="1"/>
 			</DrvPara>
 			<Vars VarGrpType="1">
 				<Name>Eingänge</Name>

@@ -962,10 +962,11 @@ function autoTube(){
   const p = SRC.process; if (!p) return;
   const step = p.step_g2 || 0;
   if ($("tAuto").checked){
-    // neues Rohr: Ablauf startet ohne Rohr, oder das alte Teil wurde entnommen (Z1 zurückgefahren).
-    // Im zweiten Fall erst ab S21 (Klemmen), dann steht Z1 auf der Startposition des Plans.
-    if (!test.active && SRC.lastStep === 0 && step >= 20 && step < 24) testStart();
-    else if (test.active && test.stale && step >= 21 && step < 23) testStart();
+    // Schritte nach Langfeld: 20 = Grundzustand. Ein Start aus 20 heißt immer: neues Rohr (Z1 steht auf 0).
+    // Fortsetzung aus 27 (Schrittbetrieb) behält das Rohr. Mit ENT (27 → 28) ist das Teil entnommen.
+    if (SRC.lastStep === 20 && step >= 21 && step <= 23) testStart();
+    else if (SRC.lastStep === 27 && step === 28 && test.active) testStop();
+    else if (!test.active && SRC.lastStep === 0 && step >= 21 && step <= 23) testStart();   // Seite während des Ablaufs geöffnet
   }
   SRC.lastStep = step;
 }

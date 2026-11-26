@@ -1,11 +1,11 @@
 # HMI-Schnittstelle
 
-Stand: 05.11.2026, erste Fassung. Grundlage ist Entscheidung E8.
+Stand: 25.11.2026 (SPS-Umsetzung, Planübergabe). Grundlage ist Entscheidung E8.
 
 ## Grundregeln
 
-- Das Backend greift nur auf `GVL_HMI.stCmd`, `GVL_HMI.stStatus`, `GVL_HMI.stParam` und `GVL_HMI.stAlarm` zu.
-- Die GUI schreibt nur `stCmd` und `stParam`. Die SPS schreibt nur `stStatus` und `stAlarm`.
+- Das Backend greift nur auf `GVL_HMI.stCmd`, `stStatus`, `stParam`, `stAlarm` und `stPlanXfer` zu.
+- Die GUI schreibt nur `stCmd`, `stParam` und `stPlanXfer`. Die SPS schreibt nur `stStatus` und `stAlarm`.
 - Die SPS entscheidet immer. Eine Anzeige in der GUI ist keine Verriegelung.
 - Benutzerrollen prüft das Backend. Verriegelungen prüft die SPS.
 - Not-Halt und Quittierung laufen über Hardware und TwinSAFE, nicht über die GUI.
@@ -16,6 +16,7 @@ Stand: 05.11.2026, erste Fassung. Grundlage ist Entscheidung E8.
 | `GVL_HMI.stStatus` | `ST_HmiStatus` | SPS | Betriebszustand, Achsen, Niederhalter, E/A |
 | `GVL_HMI.stParam` | `ST_HmiParam` | GUI | Parameterwunsch |
 | `GVL_HMI.stAlarm` | `ST_HmiAlarms` | SPS | Aktive oder nicht quittierte Alarme |
+| `GVL_HMI.stPlanXfer` | `ST_PlanTransfer` | GUI | Übergabebereich Biegeplan, wird nur bei `PlanLoad` gelesen |
 
 ## Kommandos
 
@@ -39,11 +40,18 @@ Felder: `eCmd`, `eAxis`, `nClamp`, `fPosition`, `fVelocity`, `nValue`.
 | `SimSetInput` | 300 | `nValue`, `fPosition` | 5, 6 | nur Simulation |
 | `SimInjectFault` | 301 | `nValue` | 5 | nur Simulation |
 
-Für spätere Phasen sind reserviert: `SeqStart` (400), `SeqConfirmQ1` (401), `SeqConfirmQ2` (402), `SeqPartRemoved` (403), `PlanLoad` (410), `MaterialConfirm` (411) und `CalibrateAxis` (500).
+| `SeqStart` | 400 | keine | 8 | Automatik; aus S20 nur in Grundstellung, aus S27 als Fortsetzung |
+| `SeqConfirmQ1` | 401 | keine | 8 | G2 Schritt 24 |
+| `SeqConfirmQ2` | 402 | keine | 8 | G2 Schritt 25 |
+| `SeqPartRemoved` | 403 | keine | 8 | G2 Schritt 27 (ENT) |
+| `PlanLoad` | 410 | `nValue`: Plan-ID | 9 | G2 in S20 oder S27, entkoppelt |
+| `MaterialConfirm` | 411 | `nValue`: Plan-ID | 9 | Plan geladen |
+
+Reserviert: `CalibrateAxis` (500).
 
 Zweistufige Kommandos müssen innerhalb von `GVL_Config.tTwoStepConfirmation` aufeinander folgen. Das erfüllt S3.
 
-Solange Phase 8 fehlt, gilt für Phase 4 eine Ausnahme: `AxisEnable` und `AxisHalt` sind im Simulationsbetrieb ohne Betriebsartenprüfung erlaubt.
+Ausnahme (beibehalten): `AxisEnable` und `AxisHalt` sind ohne Betriebsartenprüfung erlaubt. `AxisEnable` wird bei Not-Halt abgelehnt.
 
 ## Handshake
 
@@ -102,7 +110,7 @@ Die Werte werden in Phase 4 gemessen und angepasst. Bei langsamer ADS-Antwort da
 | `bHmiAlive`, `bSimulation` | Heartbeat und Betriebsart Simulation |
 | `bEStopActive`, `bSafetyOk` | Not-Halt und Safety-Zustand |
 | `eMode` | Betriebsart nach G1 |
-| `nStepG2`, `nStepG3`, `nBend` | Fortschritt |
+| `nStepG2`, `nStepG3`, `nBend` | Fortschritt: GRAFCET-Schritt (Ruhe: 20 bzw. 30), Abschnitt |
 | `dwBaseStateMissing` | Fehlende Grundzustandsbedingungen |
 | `stCmdAck` | Antwort auf das letzte Kommando |
 | `aAxis[1..5]` | Index nach `E_Axis`: Z1, Z2, X, A, W |
@@ -150,7 +158,13 @@ Ablauf: Die GUI schreibt `stParam` und sendet `ParamApply`. Die SPS prüft den S
 
 Die SPS begrenzt `fForceLimit_N` zusätzlich auf 25 kN. Die zulässigen Antriebsmomente liegen als Schutzparameter im AX8000 und können über die GUI nicht erhöht werden.
 
-Der Biegeplan selbst wird noch nicht übertragen. Ein Übergabebereich in `GVL_HMI` folgt in Phase 9. Phase 8 nutzt einen fest eingetragenen Plan.
+## Planübergabe
+
+`GVL_HMI.stPlanXfer : ST_PlanTransfer` (103 552 Byte, `pack_mode 1`): Kopf `ST_PlanHeader` (48 Byte: Plan-ID, Format 1, Anzahl Abschnitte und Punkte, Prüfsumme, Material), 16 × `ST_PlanSection` (je 469 Byte: Z1-Start/-Ende, Z2, erster Punkt, Punktanzahl, bis 8 Vorschubstufen, bis 16 Rotationen, Niederhaltermaske, Öffnungspositionen), 4000 × `ST_PlanPoint` (je 24 Byte: s, u, φ).
+
+1. Backend setzt den Kopf ungültig, schreibt Abschnitte und Punkte in Blöcken und zuletzt den Kopf mit der Prüfsumme (`h := ROL(h, 5) XOR Byte` über die belegten Abschnitte und Punkte).
+2. `PlanLoad` mit `nValue` = Plan-ID: `FB_PlanStore` prüft ID, Format, Prüfsumme und Inhalt und kopiert den Plan nach `GVL_Plan.stActive`.
+3. Ablehnung mit `RejectedParam` und `nDetail`: 1 ID passt nicht, 2 Format/Anzahl, 3 Prüfsumme, 10 z1_start ≥ z1_fin, 11 s nicht steigend, 12 u/φ außerhalb, 13 Z2 außerhalb, 14 Ende hinter der Kollisionsgrenze, 15 zu viele Punkte, 16 X zu schnell.
 
 ## Alarme
 

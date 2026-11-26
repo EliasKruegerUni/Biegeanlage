@@ -1,12 +1,12 @@
 # Kinematik
 
-Stand: 05.11.2026. Grundlage ist Entscheidung E6.
+Stand: 25.11.2026. Grundlage ist Entscheidung E6.
 
 ## Ziel
 
 Der Ablauf kennt nur `I_Kinematics`. Die erste Umsetzung `FB_BendKinematics` nutzt NC Camming mit Z1 als Master. Eine spätere Umsetzung mit externen Sollwerten ersetzt nur diesen Baustein.
 
-Der aktuelle Rumpf bewegt keine Achsen und enthält keine Camming-Bausteine.
+`FB_BendKinematics` lädt je Planabschnitt zwei Kurvenscheiben (X und A über Z1, nicht äquidistant, absolut), koppelt mit `MC_CamIn` und fährt den Master mit `MC_MoveAbsolute` stückweise nach dem Vorschubprofil bis zur nächsten Rotation bzw. zum Abschnittsende.
 
 ## Interface
 
@@ -20,6 +20,11 @@ Der aktuelle Rumpf bewegt keine Achsen und enthält keine Camming-Bausteine.
 | `Abort()` | `BOOL` | Master stoppen, im Stillstand entkoppeln | `Coupling`, `Running`, `Holding`, `Held` |
 | `Reset()` | `BOOL` | Fehler quittieren, Plan bleibt erhalten | `Fault` |
 | `GetStatus()` | `ST_KinStatus` | Status lesen | immer |
+| `LoadSection(n)` | `BOOL` | Kurvenscheiben des Abschnitts n laden; fertig, wenn `TableReady()` | `Loaded` |
+| `AtRotation()`, `RotationAngle()` | `BOOL`, `LREAL` | Master steht an einer Rotation; Drehwinkel für W | `Held` |
+| `ContinueAfterRotation()` | `BOOL` | nach der Drehung von W weiterfahren | `Held` an Rotation |
+| `SectionDone()` | `BOOL` | Master am Abschnittsende, Kopplung besteht | `Held` |
+| `Unload()`, `IsCoupled()` | `BOOL` | Plan verwerfen; Kopplung aktiv | entkoppelt; immer |
 
 Methoden nehmen nur Aufträge an. `TRUE` heißt nicht, dass die Bewegung fertig ist. Das Ergebnis steht im Status.
 

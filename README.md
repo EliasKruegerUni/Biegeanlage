@@ -18,8 +18,11 @@ infos liegen in docs/umgebung.txt
 ```powershell
 .\.venv\Scripts\Activate.ps1
 cd backend
-python -m biegbert            # mit SPS-Simulation; --plc ads --ams <AMS-Net-ID> für die echte SPS
+python -m biegbert            # TwinCAT lokal; --ams <AMS-Net-ID> für den Anlagen-PC
 ```
+
+Voraussetzung: TwinCAT im Run-Modus mit gestarteter SPS `Biegbert_SPS` (Simulation über das Compiler-Define `SIM`).
+Einrichtung des TwinCAT-Projekts: `docs/twincat-einrichtung.md`.
 
 Dann im Browser `http://localhost:8765/` (HMI) und `http://localhost:8765/vis/` (3D-Visualisierung).
 Details: `docs/hmi-backend.md`. Tests: `pytest` im Wurzelordner.

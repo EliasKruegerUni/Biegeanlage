@@ -2,12 +2,14 @@
 <TcPlcObject Version="1.1.0.1">
   <GVL Name="GVL_HMI" Id="{d089b204-9df5-4f11-ac7c-78e987180a16}">
     <Declaration><![CDATA[// Einzige Schnittstelle zur GUI. Details: docs/hmi-schnittstelle.md
+// Backend schreibt stCmd, stParam, stPlanXfer; die SPS schreibt stStatus und stAlarm.
 {attribute 'qualified_only'}
 VAR_GLOBAL
-    stCmd    : ST_HmiCmd;
-    stStatus : ST_HmiStatus;
-    stParam  : ST_HmiParam;
-    stAlarm  : ST_HmiAlarms;
+    stCmd      : ST_HmiCmd;
+    stStatus   : ST_HmiStatus;
+    stParam    : ST_HmiParam;
+    stAlarm    : ST_HmiAlarms;
+    stPlanXfer : ST_PlanTransfer;   // Übergabebereich Biegeplan, wird nur bei PlanLoad gelesen
 END_VAR
 ]]></Declaration>
   </GVL>

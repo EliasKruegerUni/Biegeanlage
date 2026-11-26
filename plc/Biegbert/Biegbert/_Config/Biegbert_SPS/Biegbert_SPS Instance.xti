@@ -8,14 +8,38 @@
 				<Id>0</Id>
 				<Name>PlcTask</Name>
 				<ManualConfig>
-					<OTCID>#x02010040</OTCID>
+					<OTCID>#x02010030</OTCID>
 				</ManualConfig>
-				<Priority>21</Priority>
+				<Priority>20</Priority>
 				<CycleTime>10000000</CycleTime>
 			</Context>
 		</Contexts>
 		<TaskPouOids>
-			<TaskPouOid Prio="21" OTCID="#x08502001"/>
+			<TaskPouOid Prio="20" OTCID="#x08502001"/>
 		</TaskPouOids>
 	</Instance>
+	<Mappings>
+		<OwnerA>
+			<OwnerB Name="TINC^NC-Task 1 SAF^Axes^A">
+				<Link VarA="PlcTask Inputs^GVL_Axis.A.NcToPlc" VarB="Outputs^ToPlc"/>
+				<Link VarA="PlcTask Outputs^GVL_Axis.A.PlcToNc" VarB="Inputs^FromPlc"/>
+			</OwnerB>
+			<OwnerB Name="TINC^NC-Task 1 SAF^Axes^W">
+				<Link VarA="PlcTask Inputs^GVL_Axis.W.NcToPlc" VarB="Outputs^ToPlc"/>
+				<Link VarA="PlcTask Outputs^GVL_Axis.W.PlcToNc" VarB="Inputs^FromPlc"/>
+			</OwnerB>
+			<OwnerB Name="TINC^NC-Task 1 SAF^Axes^X">
+				<Link VarA="PlcTask Inputs^GVL_Axis.X.NcToPlc" VarB="Outputs^ToPlc"/>
+				<Link VarA="PlcTask Outputs^GVL_Axis.X.PlcToNc" VarB="Inputs^FromPlc"/>
+			</OwnerB>
+			<OwnerB Name="TINC^NC-Task 1 SAF^Axes^Z1">
+				<Link VarA="PlcTask Inputs^GVL_Axis.Z1.NcToPlc" VarB="Outputs^ToPlc"/>
+				<Link VarA="PlcTask Outputs^GVL_Axis.Z1.PlcToNc" VarB="Inputs^FromPlc"/>
+			</OwnerB>
+			<OwnerB Name="TINC^NC-Task 1 SAF^Axes^Z2">
+				<Link VarA="PlcTask Inputs^GVL_Axis.Z2.NcToPlc" VarB="Outputs^ToPlc"/>
+				<Link VarA="PlcTask Outputs^GVL_Axis.Z2.PlcToNc" VarB="Inputs^FromPlc"/>
+			</OwnerB>
+		</OwnerA>
+	</Mappings>
 </TcSmItem>

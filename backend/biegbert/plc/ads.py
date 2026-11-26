@@ -1,12 +1,12 @@
-"""Anbindung an die echte SPS über ADS (pyads). Zugriff nur auf GVL_HMI.*
+"""Anbindung an die SPS (TwinCAT 3) über ADS (pyads). Zugriff nur auf GVL_HMI.*
 
 Lesen:  GVL_HMI.stStatus und GVL_HMI.stAlarm als Bytefolge, zerlegt mit layout.py
 Schreiben: einzelne Felder von GVL_HMI.stCmd bzw. GVL_HMI.stParam, nCmdId zuletzt
            und in einem eigenen Zugriff (Handshake laut docs/hmi-schnittstelle.md)
+Plan:   GVL_HMI.stPlanXfer blockweise über Index-Gruppe/-Offset, Kopf (mit Prüfsumme) zuletzt
 
-Stand: ungetestet gegen die SPS. In Phase 4 prüfen:
-  - Größen von ST_HmiStatus/ST_HmiAlarms (wird beim Verbinden verglichen)
-  - Lesen per ADS-Notification statt Polling
+Dieselbe Anbindung gilt für die echte Anlage und für TwinCAT im Simulationsbetrieb (Compiler-Define SIM);
+ob simuliert wird, meldet die SPS in stStatus.bSimulation.
 """
 from __future__ import annotations
 
@@ -14,13 +14,15 @@ import logging
 import struct
 
 from .base import PlcLink
-from .layout import F_CMD_ACK, SIZE_ALARMS, SIZE_CMD_ACK, SIZE_STATUS, unpack_alarms, unpack_status
+from .layout import (F_CMD_ACK, OFS_PLAN_POINTS, OFS_PLAN_SECTIONS, SIZE_ALARMS, SIZE_CMD_ACK, SIZE_PLAN,
+                     SIZE_STATUS, pack_plan, unpack_alarms, unpack_status)
 from .hmi_types import ST_HmiAlarms, ST_HmiCmdAck, ST_HmiParam, ST_HmiStatus
 
 log = logging.getLogger(__name__)
 
 try:
     import pyads
+    from pyads.pyads_ex import adsGetSymbolInfo
 except ImportError:  # pragma: no cover - nur ohne installierte Abhängigkeit
     pyads = None
 
@@ -34,20 +36,33 @@ class AdsPlc(PlcLink):
         self.ams_net_id, self.port = ams_net_id, port
         self.conn = None
 
+    CHUNK = 16384
+
     def connect(self):
+        """Öffnet die Verbindung. Läuft die SPS noch nicht, schlagen erst die Lesezugriffe fehl;
+        die Bridge versucht es dann zyklisch weiter."""
+        self.close()
         self.conn = pyads.Connection(self.ams_net_id, self.port)
         self.conn.open()
-        for name, expected in (("GVL_HMI.stStatus", SIZE_STATUS), ("GVL_HMI.stAlarm", SIZE_ALARMS)):
+        for name, expected in (("GVL_HMI.stStatus", SIZE_STATUS), ("GVL_HMI.stAlarm", SIZE_ALARMS),
+                               ("GVL_HMI.stPlanXfer", SIZE_PLAN)):
             try:
-                size = self.conn.get_symbol(name).size
+                size = self._sym_size(name)
                 if size != expected:
                     log.error("%s: SPS meldet %d Bytes, Backend erwartet %d – layout.py anpassen", name, size, expected)
             except Exception as e:  # noqa: BLE001 - nur Diagnose
                 log.warning("Größe von %s nicht prüfbar: %s", name, e)
 
+    def _sym_size(self, name: str) -> int:
+        """Größe einer SPS-Variablen in Bytes laut Symboltabelle (AdsSymbol selbst kennt sie nicht)."""
+        return int(adsGetSymbolInfo(self.conn._port, self.conn._adr, name).size)
+
     def close(self):
         if self.conn:
-            self.conn.close()
+            try:
+                self.conn.close()
+            except Exception:  # noqa: BLE001
+                pass
             self.conn = None
 
     def _raw(self, name: str, size: int) -> bytes:
@@ -93,3 +108,22 @@ class AdsPlc(PlcLink):
         self._w("stParam.stMaterial.fForceLimit_N", float(m.fForceLimit_N), pyads.PLCTYPE_LREAL)
         self._w("stParam.fFeedOverride_pct", float(p.fFeedOverride_pct), pyads.PLCTYPE_LREAL)
         self._w("stParam.fSingleAxisVelo_pct", float(p.fSingleAxisVelo_pct), pyads.PLCTYPE_LREAL)
+
+    def transfer_plan(self, plan: dict) -> None:
+        """Maschinenplan nach GVL_HMI.stPlanXfer schreiben. Die SPS liest ihn erst bei PlanLoad und prüft
+        dabei Plan-ID, Format und Prüfsumme."""
+        head, secs, pts = pack_plan(plan)
+        if self.conn is None:
+            raise RuntimeError("keine ADS-Verbindung")
+        sym = self.conn.get_symbol("GVL_HMI.stPlanXfer")
+        size = self._sym_size("GVL_HMI.stPlanXfer")
+        if size != SIZE_PLAN:
+            raise RuntimeError(f"GVL_HMI.stPlanXfer: SPS meldet {size} Bytes, Backend erwartet {SIZE_PLAN}")
+        ig, io = sym.index_group, sym.index_offset
+        # Kopf ungültig machen, dann Daten, zuletzt den Kopf schreiben
+        self.conn.write(ig, io, [0, 0, 0, 0], pyads.PLCTYPE_BYTE * 4)
+        for base, data in ((OFS_PLAN_SECTIONS, secs), (OFS_PLAN_POINTS, pts)):
+            for o in range(0, len(data), self.CHUNK):
+                chunk = data[o:o + self.CHUNK]
+                self.conn.write(ig, io + base + o, list(chunk), pyads.PLCTYPE_BYTE * len(chunk))
+        self.conn.write(ig, io, list(head), pyads.PLCTYPE_BYTE * len(head))

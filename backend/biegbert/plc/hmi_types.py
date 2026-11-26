@@ -123,6 +123,7 @@ class E_AlarmCode(IntEnum):
     KinMasterFault = 5001
     KinSlaveFault = 5002
     KinPositionDeviation = 5003
+    SeqStepTimeout = 6001
 
 
 def enum_name(enum_cls, value) -> str:

@@ -16,10 +16,11 @@ ALARM_TEXT = {
     AC.ClampPressureLow: "Niederhalter: Klemmdruck fehlt",
     AC.ClampZoneViolation: "Futter in der Zone eines geschlossenen Niederhalters",
     AC.DistanceZ1Z2: "Abstand Vorschub–Führung unterschritten",
-    AC.KinCoupleFailed: "Kopplung fehlgeschlagen",
+    AC.KinCoupleFailed: "Kopplung oder Kurvenscheibe fehlgeschlagen",
     AC.KinMasterFault: "Master Z1 gestört",
     AC.KinSlaveFault: "Slave gestört",
     AC.KinPositionDeviation: "Achse weicht vor Wiederanlauf vom Plan ab",
+    AC.SeqStepTimeout: "Ablaufschritt hängt (Zeitüberwachung)",
 }
 
 RESULT_TEXT = {
@@ -33,10 +34,13 @@ RESULT_TEXT = {
     R.RejectedBusy: "abgelehnt: Gerät beschäftigt",
 }
 
-STEP_G2_TEXT = {0: "–", 20: "S20 Startposition anfahren", 21: "S21 Niederhalter schließen",
-                23: "S23 Biegen (gekoppelt)", 24: "S24 Ende – Geometrie halten, Bestätigung Q1",
-                25: "S25 Lösen und Biegekopf zurück"}
-STEP_G3_TEXT = {0: "–", 30: "S30 Halten für Rotation", 31: "S31 W dreht"}
+# Schritte nach GRAFCET [Langfeld]; 20 und 30 sind die Ruheschritte
+STEP_G2_TEXT = {0: "–", 20: "S20 Grundzustand – bereit", 21: "S21 Startposition anfahren",
+                22: "S22 Niederhalter schließen", 23: "S23 Biegen (gekoppelt)",
+                24: "S24 Halten unter Last – Bestätigung Q1", 25: "S25 Niederhalter öffnen – Bestätigung Q2",
+                26: "S26 Biegekopf in Neutrallage", 27: "S27 Übergabe – Rohr entnehmen (ENT) oder fortsetzen",
+                28: "S28 Grundstellung anfahren"}
+STEP_G3_TEXT = {0: "–", 30: "S30 bereit", 31: "S31 Halt für Rotation", 32: "S32 W dreht"}
 
 
 def source_text(code: int, source: int) -> str:
@@ -53,14 +57,14 @@ def source_text(code: int, source: int) -> str:
 
 
 def detail_text(result: int, detail: int) -> str:
-    """Erklärt nDetail einer Ablehnung (Konvention der Simulation, in der SPS festzulegen)."""
+    """Erklärt nDetail einer Ablehnung (Konvention der SPS, siehe FB_HmiCommand und FB_PlanStore)."""
     if not detail:
         return ""
     if result == R.RejectedInterlock and detail & 0x10000:
         axes = [E_Axis(i).name for i in range(1, 6) if detail & (1 << i)]
         return "Achse nicht freigegeben oder gestört: " + ", ".join(axes)
     if result == R.RejectedInterlock and detail == 0x20000:
-        return "Z1 steht hinter dem Start der ersten Biegung"
+        return "Z1 steht hinter dem Start des Plans"
     try:
         return ALARM_TEXT[AC(detail)]
     except ValueError:
@@ -70,8 +74,10 @@ def detail_text(result: int, detail: int) -> str:
         if bits:
             return "; ".join(bits)
     if result == R.RejectedParam:
-        return {1: "Zielposition außerhalb der Grenzen bzw. Plan fehlt", 2: "Geschwindigkeit ungültig",
-                10: "Plan: z1_start ≥ z1_fin", 11: "Plan: s nicht streng monoton",
+        return {1: "Zielposition außerhalb der Grenzen bzw. Plan-ID passt nicht",
+                2: "Geschwindigkeit bzw. Planformat ungültig", 3: "Plan: Prüfsumme falsch (Übertragung unvollständig)",
+                10: "Plan: z1_start ≥ z1_fin", 11: "Plan: s nicht streng monoton oder Abschnitte überlappen",
                 12: "Plan: u oder φ außerhalb der Grenzen", 13: "Plan: Z2 außerhalb der Grenzen",
-                14: "Plan: Z1-Ende hinter der Kollisionsgrenze"}.get(detail, f"Detail {detail}")
+                14: "Plan: Z1-Ende hinter der Kollisionsgrenze", 15: "Plan: zu viele Stützpunkte",
+                16: "Plan: X wäre bei diesem Vorschub zu schnell"}.get(detail, f"Detail {detail}")
     return f"Detail {detail}"

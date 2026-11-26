@@ -1,74 +1,425 @@
 ﻿<?xml version="1.0" encoding="utf-8"?>
 <TcPlcObject Version="1.1.0.1">
   <POU Name="FB_BendKinematics" Id="{abaf62ff-19ca-4c7e-8ad1-e8abb9e1d4d0}" SpecialFunc="None">
-    <Declaration><![CDATA[// Rumpf ohne Achsbewegung. Bildet nur die Zustände aus docs/kinematik.md ab.
+    <Declaration><![CDATA[// Kopplung Z1 (Master) -> X, A (Slaves) mit NC Camming (E6). Eine Kurvenscheibe je Planabschnitt; Geraden sind
+// Teil der Kurvenscheibe (u = 0), dadurch kein Halt zwischen Bögen. Der Master hält nur an Rotationen (G3) und am
+// Abschnittsende. Vorschub stückweise nach dem Vorschubprofil des Abschnitts. Zustände: docs/kinematik.md
 FUNCTION_BLOCK FB_BendKinematics IMPLEMENTS I_Kinematics
 VAR
     stStatus : ST_KinStatus := (eMode := E_MotionMode.Single);
+    nSection : INT;
+    bTableReady : BOOL;
+    bLoading : BOOL;
+    bAtRot : BOOL;
+    bDone : BOOL;
+    nRotIdx : INT;            // nächste offene Rotation im Abschnitt
+    fTargetCmd : LREAL;
+    fFeedCmd : LREAL;
+    bMasterActive : BOOL;
+    bMasterReq : BOOL;
+    bHaltActive : BOOL;
+    nPhase : INT;             // Unterschritte in Coupling, Decoupling, Fault
+
+    aCamX : ARRAY[1..4000, 1..2] OF LREAL;   // Spalte 1 = Z1, Spalte 2 = X
+    aCamA : ARRAY[1..4000, 1..2] OF LREAL;   // Spalte 1 = Z1, Spalte 2 = A
+    stCamX : MC_CAM_REF;
+    stCamA : MC_CAM_REF;
+    fbSelX : MC_CamTableSelect;
+    fbSelA : MC_CamTableSelect;
+    fbInX : MC_CamIn;
+    fbInA : MC_CamIn;
+    fbOutX : MC_CamOut;
+    fbOutA : MC_CamOut;
+    fbMaster : MC_MoveAbsolute;
+    fbHalt : MC_Halt;
+    bSelExec, bInExec, bOutExec : BOOL;
+    bHoldPending : BOOL;      // Hold() während Coupling: nach dem Koppeln nicht losfahren
+END_VAR
+VAR CONSTANT
+    cTableX : UDINT := 1;
+    cTableA : UDINT := 2;
 END_VAR
 ]]></Declaration>
     <Implementation>
-      <ST><![CDATA[]]></ST>
+      <ST><![CDATA[// Aufruf über Cyclic().
+]]></ST>
     </Implementation>
-    <Method Name="Cyclic" Id="{81041cf1-360e-4cd1-bdbd-ba78d354ca8e}">
+    <Method Name="Cyclic" Id="{aff580ed-356c-5eac-8613-9a3af9e515f8}">
       <Declaration><![CDATA[METHOD Cyclic
-// Einmal pro SPS-Zyklus aufrufen.
+VAR_INPUT
+END_VAR
+VAR
+    fZ1 : LREAL;
+    fFeed : LREAL;
+    fTarget : LREAL;
+    nErr : UDINT;
+END_VAR
+]]></Declaration>
+      <Implementation>
+        <ST><![CDATA[fZ1 := GVL_Axis.Z1.NcToPlc.ActPos;
+stStatus.fMasterPos_mm := fZ1;
+
+// ── Kurvenscheiben laden ──
+fbSelX(Master := GVL_Axis.Z1, Slave := GVL_Axis.X, CamTable := stCamX, Execute := bSelExec,
+       Periodic := FALSE, MasterAbsolute := TRUE, SlaveAbsolute := TRUE, CamTableID := cTableX);
+fbSelA(Master := GVL_Axis.Z1, Slave := GVL_Axis.A, CamTable := stCamA, Execute := bSelExec,
+       Periodic := FALSE, MasterAbsolute := TRUE, SlaveAbsolute := TRUE, CamTableID := cTableA);
+IF bLoading THEN
+    IF fbSelX.Error OR fbSelA.Error THEN
+        bLoading := FALSE;
+        bSelExec := FALSE;
+        IF fbSelX.Error THEN nErr := fbSelX.ErrorID; ELSE nErr := fbSelA.ErrorID; END_IF
+        GVL_Devices.fbAlarm.Raise(E_AlarmCode.KinCoupleFailed, E_AlarmSeverity.Fault, 0, nErr);
+        stStatus.eState := E_KinState.Fault;
+        stStatus.nErrorId := nErr;
+    ELSIF fbSelX.Done AND fbSelA.Done THEN
+        bLoading := FALSE;
+        bSelExec := FALSE;
+        bTableReady := TRUE;
+    END_IF
+END_IF
+
+// ── Kopplung ──
+fbInX(Master := GVL_Axis.Z1, Slave := GVL_Axis.X, Execute := bInExec, MasterOffset := 0.0, SlaveOffset := 0.0,
+      MasterScaling := 1.0, SlaveScaling := 1.0, StartMode := MC_StartMode.MC_STARTMODE_ABSOLUTE, CamTableID := cTableX);
+fbInA(Master := GVL_Axis.Z1, Slave := GVL_Axis.A, Execute := bInExec, MasterOffset := 0.0, SlaveOffset := 0.0,
+      MasterScaling := 1.0, SlaveScaling := 1.0, StartMode := MC_StartMode.MC_STARTMODE_ABSOLUTE, CamTableID := cTableA);
+fbOutX(Slave := GVL_Axis.X, Execute := bOutExec);
+fbOutA(Slave := GVL_Axis.A, Execute := bOutExec);
+
+// ── Master: Fahrauftrag und Halt ──
+IF bMasterReq THEN
+    bMasterReq := FALSE;
+    fbMaster(Axis := GVL_Axis.Z1, Execute := FALSE);
+    bMasterActive := TRUE;
+END_IF
+fbMaster(Axis := GVL_Axis.Z1, Execute := bMasterActive, Position := fTargetCmd, Velocity := fFeedCmd,
+         Acceleration := GVL_Config.aAxisAccel[1], Deceleration := GVL_Config.aAxisAccel[1]);
+fbHalt(Axis := GVL_Axis.Z1, Execute := bHaltActive, Deceleration := GVL_Config.aAxisAccel[1]);
+
+// ── Überwachung im gekoppelten Betrieb ──
+CASE stStatus.eState OF
+E_KinState.Coupling, E_KinState.Running, E_KinState.Holding, E_KinState.Held:
+    IF GVL_Devices.aAxis[1].bError THEN
+        EnterFault(E_AlarmCode.KinMasterFault, GVL_Devices.aAxis[1].nErrorId);
+    ELSIF GVL_Devices.aAxis[3].bError THEN
+        EnterFault(E_AlarmCode.KinSlaveFault, GVL_Devices.aAxis[3].nErrorId);
+    ELSIF GVL_Devices.aAxis[4].bError THEN
+        EnterFault(E_AlarmCode.KinSlaveFault, GVL_Devices.aAxis[4].nErrorId);
+    ELSIF fbInX.Error OR fbInA.Error THEN
+        IF fbInX.Error THEN nErr := fbInX.ErrorID; ELSE nErr := fbInA.ErrorID; END_IF
+        EnterFault(E_AlarmCode.KinCoupleFailed, nErr);
+    ELSIF fbMaster.Error THEN
+        EnterFault(E_AlarmCode.KinMasterFault, fbMaster.ErrorID);
+    END_IF
+END_CASE
+
+// ── Zustände ──
+CASE stStatus.eState OF
+E_KinState.Coupling:
+    bInExec := TRUE;
+    IF fbInX.InSync AND fbInA.InSync THEN
+        IF bHoldPending THEN
+            bHoldPending := FALSE;
+            stStatus.eState := E_KinState.Held;
+        ELSE
+            stStatus.eState := E_KinState.Running;
+            IssueMaster(TRUE);
+        END_IF
+    END_IF
+
+E_KinState.Running:
+    fFeed := DesiredFeed(fZ1);
+    fTarget := NextStop();
+    IF ABS(fFeed - fFeedCmd) > 1.0E-6 OR ABS(fTarget - fTargetCmd) > 1.0E-6 THEN
+        IssueMaster(FALSE);
+    END_IF
+    IF bMasterActive AND fbMaster.Done THEN
+        bMasterActive := FALSE;
+        IF ABS(fZ1 - GVL_Plan.stActive.aSection[nSection].fZ1Fin_mm) <= GVL_Config.fPosTol
+           AND nRotIdx > UINT_TO_INT(GVL_Plan.stActive.aSection[nSection].nRotCount) THEN
+            bDone := TRUE;
+        ELSE
+            bAtRot := TRUE;
+        END_IF
+        stStatus.eState := E_KinState.Held;
+    END_IF
+
+E_KinState.Holding:
+    IF NOT bHaltActive THEN
+        bMasterActive := FALSE;
+        fbHalt(Axis := GVL_Axis.Z1, Execute := FALSE);
+        bHaltActive := TRUE;
+    ELSIF fbHalt.Done OR fbHalt.Error OR fbHalt.CommandAborted THEN
+        bHaltActive := FALSE;
+        stStatus.eState := E_KinState.Held;
+    END_IF
+
+E_KinState.Decoupling:
+    CASE nPhase OF
+    0:  // Master anhalten
+        bMasterActive := FALSE;
+        IF ABS(GVL_Axis.Z1.NcToPlc.ActVelo) > 0.001 THEN
+            fbHalt(Axis := GVL_Axis.Z1, Execute := FALSE);
+            bHaltActive := TRUE;
+            nPhase := 1;
+        ELSE
+            nPhase := 2;
+        END_IF
+    1:
+        IF fbHalt.Done OR fbHalt.Error OR fbHalt.CommandAborted THEN
+            bHaltActive := FALSE;
+            nPhase := 2;
+        END_IF
+    2:  // Slaves auskoppeln (erst im Stillstand des Masters)
+        bInExec := FALSE;
+        bOutExec := TRUE;
+        nPhase := 3;
+    3:
+        IF (fbOutX.Done OR fbOutX.Error) AND (fbOutA.Done OR fbOutA.Error) THEN
+            bOutExec := FALSE;
+            nPhase := 0;
+            bTableReady := FALSE;
+            bAtRot := FALSE;
+            bDone := FALSE;
+            IF GVL_Plan.bValid AND stStatus.nPlanId <> 0 THEN
+                stStatus.eState := E_KinState.Loaded;
+            ELSE
+                stStatus.eState := E_KinState.Idle;
+            END_IF
+        END_IF
+    END_CASE
+
+E_KinState.Fault:
+    // Master stoppen, dann Slaves auskoppeln; bleibt Fault bis Reset()
+    CASE nPhase OF
+    0:
+        bMasterActive := FALSE;
+        IF NOT GVL_Devices.aAxis[1].bError AND ABS(GVL_Axis.Z1.NcToPlc.ActVelo) > 0.001 THEN
+            fbHalt(Axis := GVL_Axis.Z1, Execute := FALSE);
+            bHaltActive := TRUE;
+        END_IF
+        nPhase := 1;
+    1:
+        IF NOT bHaltActive OR fbHalt.Done OR fbHalt.Error OR fbHalt.CommandAborted THEN
+            bHaltActive := FALSE;
+            bInExec := FALSE;
+            bOutExec := TRUE;
+            nPhase := 2;
+        END_IF
+    2:
+        IF (fbOutX.Done OR fbOutX.Error) AND (fbOutA.Done OR fbOutA.Error) THEN
+            bOutExec := FALSE;
+            nPhase := 3;
+        END_IF
+    END_CASE
+END_CASE
+
+CASE stStatus.eState OF
+E_KinState.Coupling, E_KinState.Running:
+    stStatus.eMode := E_MotionMode.Coupled;
+E_KinState.Holding, E_KinState.Held:
+    stStatus.eMode := E_MotionMode.Hold;
+ELSE
+    stStatus.eMode := E_MotionMode.Single;
+END_CASE
+stStatus.bError := stStatus.eState = E_KinState.Fault;
+]]></ST>
+      </Implementation>
+    </Method>
+    <Method Name="EnterFault" Id="{f55664a3-d3c3-5bbd-9502-0e53e965b124}">
+      <Declaration><![CDATA[METHOD PRIVATE EnterFault
+VAR_INPUT
+    eCode : E_AlarmCode;
+    nErr : UDINT;
+END_VAR
+]]></Declaration>
+      <Implementation>
+        <ST><![CDATA[GVL_Devices.fbAlarm.Raise(eCode, E_AlarmSeverity.Fault, 0, nErr);
+stStatus.nErrorId := nErr;
+stStatus.eState := E_KinState.Fault;
+bHaltActive := FALSE;
+nPhase := 0;
+]]></ST>
+      </Implementation>
+    </Method>
+    <Method Name="FeedAt" Id="{2375d00d-6231-508e-a110-c00123dc1def}">
+      <Declaration><![CDATA[METHOD PRIVATE FeedAt : LREAL
+VAR_INPUT
+    fZ1 : LREAL;
+END_VAR
+VAR
+    k : INT;
+END_VAR
+]]></Declaration>
+      <Implementation>
+        <ST><![CDATA[FeedAt := GVL_Plan.stActive.aSection[nSection].aFeed[1].fFeed_mm_s;
+FOR k := 2 TO UINT_TO_INT(GVL_Plan.stActive.aSection[nSection].nFeedCount) DO
+    IF fZ1 >= GVL_Plan.stActive.aSection[nSection].aFeed[k].fZ1_mm - 1.0E-6 THEN
+        FeedAt := GVL_Plan.stActive.aSection[nSection].aFeed[k].fFeed_mm_s;
+    END_IF
+END_FOR
+]]></ST>
+      </Implementation>
+    </Method>
+    <Method Name="DesiredFeed" Id="{80352493-05e3-557f-a5ac-bb0b379acfc6}">
+      <Declaration><![CDATA[METHOD PRIVATE DesiredFeed : LREAL
+// Vorschub mit Vorausschau um den Bremsweg: vor einer Biegezone schon langsam sein, damit X nicht überfordert wird.
+VAR_INPUT
+    fZ1 : LREAL;
+END_VAR
+VAR
+    v0 : LREAL;
+END_VAR
+]]></Declaration>
+      <Implementation>
+        <ST><![CDATA[v0 := MAX(fFeedCmd, FeedAt(fZ1));
+DesiredFeed := FeedAhead(fZ1, v0 * v0 / (2.0 * GVL_Config.aAxisAccel[1]) + 1.0);
+]]></ST>
+      </Implementation>
+    </Method>
+    <Method Name="FeedAhead" Id="{84ec66e9-9a29-54d2-8348-0dea178d74d6}">
+      <Declaration><![CDATA[METHOD PRIVATE FeedAhead : LREAL
+// Kleinster Vorschub im Bereich [fZ1, fZ1 + fLook].
+VAR_INPUT
+    fZ1 : LREAL;
+    fLook : LREAL;
+END_VAR
+VAR
+    k : INT;
+END_VAR
+]]></Declaration>
+      <Implementation>
+        <ST><![CDATA[FeedAhead := FeedAt(fZ1);
+FOR k := 1 TO UINT_TO_INT(GVL_Plan.stActive.aSection[nSection].nFeedCount) DO
+    IF GVL_Plan.stActive.aSection[nSection].aFeed[k].fZ1_mm > fZ1
+       AND GVL_Plan.stActive.aSection[nSection].aFeed[k].fZ1_mm <= fZ1 + fLook THEN
+        FeedAhead := MIN(FeedAhead, GVL_Plan.stActive.aSection[nSection].aFeed[k].fFeed_mm_s);
+    END_IF
+END_FOR
+]]></ST>
+      </Implementation>
+    </Method>
+    <Method Name="NextStop" Id="{dfec63ca-2a3a-5378-bc1d-452a3364f15e}">
+      <Declaration><![CDATA[METHOD PRIVATE NextStop : LREAL
 VAR_INPUT
 END_VAR
 ]]></Declaration>
       <Implementation>
-        <ST><![CDATA[// TODO Phase 8: NC-Camming hier kapseln. Ablaufcode nutzt nur I_Kinematics.
-CASE stStatus.eState OF
-    E_KinState.Coupling:
-        stStatus.eState := E_KinState.Running;
-    E_KinState.Holding:
-        stStatus.eState := E_KinState.Held;
-    E_KinState.Decoupling:
-        stStatus.eState := E_KinState.Loaded;
-END_CASE
-
-CASE stStatus.eState OF
-    E_KinState.Coupling, E_KinState.Running:
-        stStatus.eMode := E_MotionMode.Coupled;
-    E_KinState.Holding, E_KinState.Held:
-        stStatus.eMode := E_MotionMode.Hold;
+        <ST><![CDATA[IF nRotIdx <= UINT_TO_INT(GVL_Plan.stActive.aSection[nSection].nRotCount) THEN
+    NextStop := GVL_Plan.stActive.aSection[nSection].aRot[nRotIdx].fZ1_mm;
 ELSE
-    stStatus.eMode := E_MotionMode.Single;
-END_CASE]]></ST>
+    NextStop := GVL_Plan.stActive.aSection[nSection].fZ1Fin_mm;
+END_IF
+]]></ST>
       </Implementation>
     </Method>
-    <Method Name="LoadPlan" Id="{526169f2-9672-4661-a8c6-ce8e7d3f266a}">
+    <Method Name="IssueMaster" Id="{7559edf4-9865-5524-9455-7632f23917d6}">
+      <Declaration><![CDATA[METHOD PRIVATE IssueMaster
+VAR_INPUT
+    bForce : BOOL;
+END_VAR
+]]></Declaration>
+      <Implementation>
+        <ST><![CDATA[fFeedCmd := DesiredFeed(GVL_Axis.Z1.NcToPlc.ActPos);
+fTargetCmd := NextStop();
+bMasterReq := TRUE;
+]]></ST>
+      </Implementation>
+    </Method>
+    <Method Name="LoadPlan" Id="{1a59103d-7dd2-528f-81f0-01e2e6e1aa45}">
       <Declaration><![CDATA[METHOD LoadPlan : BOOL
-// TRUE, wenn der Plan angenommen wurde. Nur im Modus Single.
 VAR_INPUT
     nPlanId : UDINT;
 END_VAR
 ]]></Declaration>
       <Implementation>
-        <ST><![CDATA[IF stStatus.eState = E_KinState.Idle OR stStatus.eState = E_KinState.Loaded THEN
-    // TODO Phase 8: Biegeplan prüfen und Kurvenscheiben laden.
+        <ST><![CDATA[IF (stStatus.eState = E_KinState.Idle OR stStatus.eState = E_KinState.Loaded)
+   AND GVL_Plan.bValid AND GVL_Plan.stActive.stHeader.nPlanId = nPlanId AND nPlanId <> 0 THEN
     stStatus.nPlanId := nPlanId;
     stStatus.eState := E_KinState.Loaded;
+    nSection := 0;
+    bTableReady := FALSE;
     LoadPlan := TRUE;
-END_IF]]></ST>
+END_IF
+]]></ST>
       </Implementation>
     </Method>
-    <Method Name="Start" Id="{acc7d7d6-fda4-47a8-9c3f-c2470f83622d}">
-      <Declaration><![CDATA[METHOD Start : BOOL
-// Koppelt die Slaves an der aktuellen Masterposition und startet den Master.
+    <Method Name="LoadSection" Id="{88b35f18-a87a-5892-ac0b-1225a9c89db2}">
+      <Declaration><![CDATA[METHOD LoadSection : BOOL
+VAR_INPUT
+    nSection : INT;
+END_VAR
+VAR
+    i, n, nFirst : INT;
+END_VAR
+]]></Declaration>
+      <Implementation>
+        <ST><![CDATA[IF stStatus.eState <> E_KinState.Loaded OR bLoading OR NOT GVL_Plan.bValid
+   OR nSection < 1 OR nSection > UINT_TO_INT(GVL_Plan.stActive.stHeader.nSectionCount) THEN
+    RETURN;
+END_IF
+THIS^.nSection := nSection;
+nFirst := UDINT_TO_INT(GVL_Plan.stActive.aSection[nSection].nFirstPoint);
+n := UDINT_TO_INT(GVL_Plan.stActive.aSection[nSection].nPointCount);
+FOR i := 1 TO n DO
+    aCamX[i, 1] := GVL_Plan.stActive.aPoint[nFirst + i - 1].fS_mm;
+    aCamX[i, 2] := GVL_Plan.stActive.aPoint[nFirst + i - 1].fU_mm;
+    aCamA[i, 1] := GVL_Plan.stActive.aPoint[nFirst + i - 1].fS_mm;
+    aCamA[i, 2] := GVL_Plan.stActive.aPoint[nFirst + i - 1].fPhi_deg;
+END_FOR
+stCamX.pArray := ADR(aCamX);
+stCamX.ArraySize := SIZEOF(aCamX);
+stCamX.TableType := MC_TableType.MC_TABLETYPE_NONEQUIDISTANT;
+stCamX.NoOfRows := INT_TO_UDINT(n);
+stCamX.NoOfColumns := 2;
+stCamA.pArray := ADR(aCamA);
+stCamA.ArraySize := SIZEOF(aCamA);
+stCamA.TableType := MC_TableType.MC_TABLETYPE_NONEQUIDISTANT;
+stCamA.NoOfRows := INT_TO_UDINT(n);
+stCamA.NoOfColumns := 2;
+nRotIdx := 1;
+bAtRot := FALSE;
+bDone := FALSE;
+bTableReady := FALSE;
+bLoading := TRUE;
+bSelExec := FALSE;
+fbSelX(Master := GVL_Axis.Z1, Slave := GVL_Axis.X, CamTable := stCamX, Execute := FALSE);
+fbSelA(Master := GVL_Axis.Z1, Slave := GVL_Axis.A, CamTable := stCamA, Execute := FALSE);
+bSelExec := TRUE;
+LoadSection := TRUE;
+]]></ST>
+      </Implementation>
+    </Method>
+    <Method Name="TableReady" Id="{bd1b329c-e1a5-5043-90b8-ae07fdc8fa92}">
+      <Declaration><![CDATA[METHOD TableReady : BOOL
 VAR_INPUT
 END_VAR
 ]]></Declaration>
       <Implementation>
-        <ST><![CDATA[IF stStatus.eState = E_KinState.Loaded THEN
-    stStatus.eState := E_KinState.Coupling;
-    Start := TRUE;
-END_IF]]></ST>
+        <ST><![CDATA[TableReady := bTableReady AND NOT bLoading;
+]]></ST>
       </Implementation>
     </Method>
-    <Method Name="Hold" Id="{ed53b291-0b6a-4d23-861a-474ac0e64334}">
+    <Method Name="Start" Id="{12fde136-d5dc-5b52-99e2-bfa279f67882}">
+      <Declaration><![CDATA[METHOD Start : BOOL
+VAR_INPUT
+END_VAR
+]]></Declaration>
+      <Implementation>
+        <ST><![CDATA[IF stStatus.eState = E_KinState.Loaded AND bTableReady THEN
+    bInExec := FALSE;
+    fbInX(Master := GVL_Axis.Z1, Slave := GVL_Axis.X, Execute := FALSE);
+    fbInA(Master := GVL_Axis.Z1, Slave := GVL_Axis.A, Execute := FALSE);
+    bHoldPending := FALSE;
+    stStatus.eState := E_KinState.Coupling;
+    Start := TRUE;
+END_IF
+]]></ST>
+      </Implementation>
+    </Method>
+    <Method Name="Hold" Id="{c6c1df15-6219-5b42-9210-e8d36d40a027}">
       <Declaration><![CDATA[METHOD Hold : BOOL
-// Bremst den Master. Die Kopplung bleibt bestehen.
 VAR_INPUT
 END_VAR
 ]]></Declaration>
@@ -76,65 +427,157 @@ END_VAR
         <ST><![CDATA[IF stStatus.eState = E_KinState.Running THEN
     stStatus.eState := E_KinState.Holding;
     Hold := TRUE;
-END_IF]]></ST>
+ELSIF stStatus.eState = E_KinState.Coupling THEN
+    // noch nicht gefahren: Kopplung fertigstellen lassen, aber nicht losfahren
+    bHoldPending := TRUE;
+    Hold := TRUE;
+END_IF
+]]></ST>
       </Implementation>
     </Method>
-    <Method Name="Resume" Id="{8dd63b80-1077-4b5d-855c-ed18f8505211}">
+    <Method Name="Resume" Id="{68699082-a33c-5368-a141-768be85c8677}">
       <Declaration><![CDATA[METHOD Resume : BOOL
-// Setzt den Master aus dem Halt fort.
 VAR_INPUT
 END_VAR
 ]]></Declaration>
       <Implementation>
-        <ST><![CDATA[IF stStatus.eState = E_KinState.Held THEN
-    // TODO Phase 8: Abweichung der Slaves vom Plan prüfen.
+        <ST><![CDATA[IF stStatus.eState = E_KinState.Held AND NOT bAtRot AND NOT bDone THEN
     stStatus.eState := E_KinState.Running;
+    IssueMaster(TRUE);
     Resume := TRUE;
-END_IF]]></ST>
+END_IF
+]]></ST>
       </Implementation>
     </Method>
-    <Method Name="Abort" Id="{c8be0c35-5607-4d55-9ba8-ed90b066495d}">
+    <Method Name="AtRotation" Id="{b3673336-6ed2-582d-b61b-16c08f07ae13}">
+      <Declaration><![CDATA[METHOD AtRotation : BOOL
+VAR_INPUT
+END_VAR
+]]></Declaration>
+      <Implementation>
+        <ST><![CDATA[AtRotation := bAtRot AND stStatus.eState = E_KinState.Held;
+]]></ST>
+      </Implementation>
+    </Method>
+    <Method Name="RotationAngle" Id="{66fef793-341a-58f4-aa20-cf6d65bfb2ce}">
+      <Declaration><![CDATA[METHOD RotationAngle : LREAL
+VAR_INPUT
+END_VAR
+]]></Declaration>
+      <Implementation>
+        <ST><![CDATA[IF nSection >= 1 AND nSection <= GVL_Config.cMaxSections AND nRotIdx >= 1
+   AND_THEN nRotIdx <= UINT_TO_INT(GVL_Plan.stActive.aSection[nSection].nRotCount) THEN
+    RotationAngle := GVL_Plan.stActive.aSection[nSection].aRot[nRotIdx].fW_deg;
+END_IF
+]]></ST>
+      </Implementation>
+    </Method>
+    <Method Name="ContinueAfterRotation" Id="{7f03ef04-2421-51cd-baa4-3bc35eb5e960}">
+      <Declaration><![CDATA[METHOD ContinueAfterRotation : BOOL
+VAR_INPUT
+END_VAR
+]]></Declaration>
+      <Implementation>
+        <ST><![CDATA[IF bAtRot AND stStatus.eState = E_KinState.Held THEN
+    bAtRot := FALSE;
+    nRotIdx := nRotIdx + 1;
+    stStatus.eState := E_KinState.Running;
+    IssueMaster(TRUE);
+    ContinueAfterRotation := TRUE;
+END_IF
+]]></ST>
+      </Implementation>
+    </Method>
+    <Method Name="SectionDone" Id="{0063bef0-090a-57df-aff4-68222653f0d7}">
+      <Declaration><![CDATA[METHOD SectionDone : BOOL
+VAR_INPUT
+END_VAR
+]]></Declaration>
+      <Implementation>
+        <ST><![CDATA[SectionDone := bDone AND stStatus.eState = E_KinState.Held;
+]]></ST>
+      </Implementation>
+    </Method>
+    <Method Name="Abort" Id="{2ae0d8f9-5fe6-5a50-9ac6-3f8897e01084}">
       <Declaration><![CDATA[METHOD Abort : BOOL
-// Stoppt den Master und löst die Kopplung.
 VAR_INPUT
 END_VAR
 ]]></Declaration>
       <Implementation>
         <ST><![CDATA[CASE stStatus.eState OF
-    E_KinState.Coupling, E_KinState.Running, E_KinState.Holding, E_KinState.Held:
-        stStatus.eState := E_KinState.Decoupling;
-        Abort := TRUE;
-END_CASE]]></ST>
+E_KinState.Coupling, E_KinState.Running, E_KinState.Holding, E_KinState.Held:
+    stStatus.eState := E_KinState.Decoupling;
+    nPhase := 0;
+    Abort := TRUE;
+END_CASE
+]]></ST>
       </Implementation>
     </Method>
-    <Method Name="Reset" Id="{6f4d7ced-747b-48d7-8a5c-aa25bbc1f8d9}">
+    <Method Name="Reset" Id="{1765d720-337b-529f-9963-2e00817d3e4b}">
       <Declaration><![CDATA[METHOD Reset : BOOL
-// Quittiert einen Fehler der Kinematik.
 VAR_INPUT
 END_VAR
 ]]></Declaration>
       <Implementation>
-        <ST><![CDATA[IF stStatus.eState = E_KinState.Fault THEN
-    stStatus.bError := FALSE;
-    stStatus.nErrorId := 0;
-    // Der Plan bleibt erhalten, damit der Ablauf am unterbrochenen Schritt fortsetzen kann (S2).
-    IF stStatus.nPlanId <> 0 THEN
-        stStatus.eState := E_KinState.Loaded;
-    ELSE
-        stStatus.eState := E_KinState.Idle;
+        <ST><![CDATA[// Nur wenn die Slaves ausgekoppelt sind und keine Achse mehr gestört ist.
+IF stStatus.eState = E_KinState.Fault AND nPhase >= 3 THEN
+    IF NOT GVL_Devices.aAxis[1].bError AND NOT GVL_Devices.aAxis[3].bError AND NOT GVL_Devices.aAxis[4].bError THEN
+        stStatus.bError := FALSE;
+        stStatus.nErrorId := 0;
+        nPhase := 0;
+        bTableReady := FALSE;
+        bAtRot := FALSE;
+        bDone := FALSE;
+        IF GVL_Plan.bValid AND stStatus.nPlanId <> 0 THEN
+            stStatus.eState := E_KinState.Loaded;
+        ELSE
+            stStatus.eState := E_KinState.Idle;
+        END_IF
+        Reset := TRUE;
     END_IF
-    Reset := TRUE;
-END_IF]]></ST>
+END_IF
+]]></ST>
       </Implementation>
     </Method>
-    <Method Name="GetStatus" Id="{ffb39e2c-2bab-4677-8780-9c0937cd351a}">
-      <Declaration><![CDATA[METHOD GetStatus : ST_KinStatus
-// Aktueller Status.
+    <Method Name="Unload" Id="{dc02c2ac-520c-567c-a20e-ff1a73f2ce12}">
+      <Declaration><![CDATA[METHOD Unload : BOOL
 VAR_INPUT
 END_VAR
 ]]></Declaration>
       <Implementation>
-        <ST><![CDATA[GetStatus := stStatus;]]></ST>
+        <ST><![CDATA[IF stStatus.eState = E_KinState.Idle OR stStatus.eState = E_KinState.Loaded THEN
+    stStatus.eState := E_KinState.Idle;
+    stStatus.nPlanId := 0;
+    nSection := 0;
+    bTableReady := FALSE;
+    Unload := TRUE;
+END_IF
+]]></ST>
+      </Implementation>
+    </Method>
+    <Method Name="IsCoupled" Id="{274817c4-0600-5a45-895c-4cbc2d2d95ad}">
+      <Declaration><![CDATA[METHOD IsCoupled : BOOL
+VAR_INPUT
+END_VAR
+]]></Declaration>
+      <Implementation>
+        <ST><![CDATA[CASE stStatus.eState OF
+E_KinState.Coupling, E_KinState.Running, E_KinState.Holding, E_KinState.Held, E_KinState.Decoupling:
+    IsCoupled := TRUE;
+E_KinState.Fault:
+    IsCoupled := nPhase < 3;
+END_CASE
+]]></ST>
+      </Implementation>
+    </Method>
+    <Method Name="GetStatus" Id="{b8e43b84-3c03-5854-8938-d7a4893a5305}">
+      <Declaration><![CDATA[METHOD GetStatus : ST_KinStatus
+VAR_INPUT
+END_VAR
+]]></Declaration>
+      <Implementation>
+        <ST><![CDATA[GetStatus := stStatus;
+]]></ST>
       </Implementation>
     </Method>
   </POU>

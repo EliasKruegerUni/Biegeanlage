@@ -17,17 +17,13 @@
     <Implicit_Jitter_Distribution>{2f37523a-1114-457d-a816-fbe47fdfc6a9}</Implicit_Jitter_Distribution>
     <LibraryReferences>{2ae52afe-0afe-4743-b5dc-43a3a44cf3dd}</LibraryReferences>
     <Released>false</Released>
-    <CompilerDefines>
-    </CompilerDefines>
+    <CompilerDefines>SIM</CompilerDefines>
   </PropertyGroup>
   <ItemGroup>
     <Compile Include="07_Test\FB_BendKinematics_Test.TcPOU">
       <SubType>Code</SubType>
     </Compile>
     <Compile Include="07_Test\PRG_TEST.TcPOU">
-      <SubType>Code</SubType>
-    </Compile>
-    <Compile Include="PlcTask.TcTTO">
       <SubType>Code</SubType>
     </Compile>
     <Compile Include="00_GVL\GVL_Config.TcGVL">
@@ -108,6 +104,99 @@
     <Compile Include="04_Kinematics\I_Kinematics.TcIO">
       <SubType>Code</SubType>
     </Compile>
+    <Compile Include="00_GVL\GVL_Axis.TcGVL">
+      <SubType>Code</SubType>
+    </Compile>
+    <Compile Include="00_GVL\GVL_Devices.TcGVL">
+      <SubType>Code</SubType>
+    </Compile>
+    <Compile Include="00_GVL\GVL_IO.TcGVL">
+      <SubType>Code</SubType>
+    </Compile>
+    <Compile Include="00_GVL\GVL_Plan.TcGVL">
+      <SubType>Code</SubType>
+    </Compile>
+    <Compile Include="00_GVL\GVL_Sim.TcGVL">
+      <SubType>Code</SubType>
+    </Compile>
+    <Compile Include="01_DUT\E_G0Step.TcDUT">
+      <SubType>Code</SubType>
+    </Compile>
+    <Compile Include="01_DUT\E_G2Step.TcDUT">
+      <SubType>Code</SubType>
+    </Compile>
+    <Compile Include="01_DUT\E_G3Step.TcDUT">
+      <SubType>Code</SubType>
+    </Compile>
+    <Compile Include="01_DUT\ST_FeedPoint.TcDUT">
+      <SubType>Code</SubType>
+    </Compile>
+    <Compile Include="01_DUT\ST_PlanHeader.TcDUT">
+      <SubType>Code</SubType>
+    </Compile>
+    <Compile Include="01_DUT\ST_PlanPoint.TcDUT">
+      <SubType>Code</SubType>
+    </Compile>
+    <Compile Include="01_DUT\ST_PlanSection.TcDUT">
+      <SubType>Code</SubType>
+    </Compile>
+    <Compile Include="01_DUT\ST_PlanTransfer.TcDUT">
+      <SubType>Code</SubType>
+    </Compile>
+    <Compile Include="01_DUT\ST_RotPoint.TcDUT">
+      <SubType>Code</SubType>
+    </Compile>
+    <Compile Include="02_IO\FB_IoMap.TcPOU">
+      <SubType>Code</SubType>
+    </Compile>
+    <Compile Include="02_IO\FB_IoSim.TcPOU">
+      <SubType>Code</SubType>
+    </Compile>
+    <Compile Include="03_Devices\FB_Axis.TcPOU">
+      <SubType>Code</SubType>
+    </Compile>
+    <Compile Include="03_Devices\FB_Clamp.TcPOU">
+      <SubType>Code</SubType>
+    </Compile>
+    <Compile Include="03_Devices\F_Mod360.TcPOU">
+      <SubType>Code</SubType>
+    </Compile>
+    <Compile Include="04_Kinematics\F_ChuckInZone.TcPOU">
+      <SubType>Code</SubType>
+    </Compile>
+    <Compile Include="04_Kinematics\F_ClampBlocking.TcPOU">
+      <SubType>Code</SubType>
+    </Compile>
+    <Compile Include="04_Kinematics\F_Z1Max.TcPOU">
+      <SubType>Code</SubType>
+    </Compile>
+    <Compile Include="05_Sequence\FB_BendSequence.TcPOU">
+      <SubType>Code</SubType>
+    </Compile>
+    <Compile Include="05_Sequence\FB_Interlocks.TcPOU">
+      <SubType>Code</SubType>
+    </Compile>
+    <Compile Include="05_Sequence\FB_ModeManager.TcPOU">
+      <SubType>Code</SubType>
+    </Compile>
+    <Compile Include="06_HMI\FB_AlarmManager.TcPOU">
+      <SubType>Code</SubType>
+    </Compile>
+    <Compile Include="06_HMI\FB_HmiCommand.TcPOU">
+      <SubType>Code</SubType>
+    </Compile>
+    <Compile Include="06_HMI\FB_HmiStatus.TcPOU">
+      <SubType>Code</SubType>
+    </Compile>
+    <Compile Include="06_HMI\FB_PlanStore.TcPOU">
+      <SubType>Code</SubType>
+    </Compile>
+    <Compile Include="06_HMI\F_PlanChecksum.TcPOU">
+      <SubType>Code</SubType>
+    </Compile>
+    <Compile Include="PlcTask.TcTTO">
+      <SubType>Code</SubType>
+    </Compile>
     <Compile Include="POUs\MAIN.TcPOU">
       <SubType>Code</SubType>
     </Compile>
@@ -125,6 +214,14 @@
     <Folder Include="VISUs" />
   </ItemGroup>
   <ItemGroup>
+    <PlaceholderReference Include="Tc2_MC2">
+      <DefaultResolution>Tc2_MC2, * (Beckhoff Automation GmbH)</DefaultResolution>
+      <Namespace>Tc2_MC2</Namespace>
+    </PlaceholderReference>
+    <PlaceholderReference Include="Tc2_MC2_Camming">
+      <DefaultResolution>Tc2_MC2_Camming, * (Beckhoff Automation GmbH)</DefaultResolution>
+      <Namespace>Tc2_MC2_Camming</Namespace>
+    </PlaceholderReference>
     <PlaceholderReference Include="Tc2_Standard">
       <DefaultResolution>Tc2_Standard, * (Beckhoff Automation GmbH)</DefaultResolution>
       <Namespace>Tc2_Standard</Namespace>

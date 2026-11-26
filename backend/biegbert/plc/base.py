@@ -1,7 +1,6 @@
 """Abstrakte Verbindung zur SPS.
 
 Die Bridge kennt nur diese Klasse. Implementierungen:
-  sim.SimPlc – SPS-Simulation im Prozess (nach docs/hmi-schnittstelle.md)
   ads.AdsPlc – echte SPS über ADS (pyads), Zugriff nur auf GVL_HMI.*
 
 Alle Methoden sind blockierend; die Bridge ruft sie im Thread-Pool auf.
@@ -47,6 +46,6 @@ class PlcLink(ABC):
     @abstractmethod
     def write_param(self, p: ST_HmiParam) -> None: ...
 
+    @abstractmethod
     def transfer_plan(self, plan: dict) -> None:
-        """Maschinenplan übergeben. In GVL_HMI ist der Übergabebereich erst für Phase 9 vorgesehen."""
-        raise NotImplementedError("Planübergabe an die SPS folgt in Phase 9 (Übergabebereich in GVL_HMI fehlt).")
+        """Maschinenplan nach GVL_HMI.stPlanXfer schreiben (layout.pack_plan)."""

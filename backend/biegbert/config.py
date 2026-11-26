@@ -1,8 +1,9 @@
 """Maschinen- und Laufzeitkonfiguration.
 
 Werte mit dem Kommentar VORLÄUFIG stammen aus Doku/CAD-Abschätzungen und
-werden an der Anlage ersetzt. Grenzwerte gehören in der SPS nach GVL_Config;
-das Backend nutzt sie nur für Vorabprüfung und Simulation.
+werden an der Anlage ersetzt. Führend sind die Werte in der SPS (GVL_Config);
+das Backend nutzt sie nur für die Vorabprüfung der Pläne und für das HMI.
+Gleich halten mit plc/.../00_GVL/GVL_Config.TcGVL.
 """
 from __future__ import annotations
 
@@ -78,7 +79,7 @@ class Timing:
 
 @dataclass
 class Settings:
-    plc: str = "sim"                       # "sim" oder "ads"
+    plc: str = "ads"                       # einzige Anbindung: TwinCAT über ADS
     ams_net_id: str = "127.0.0.1.1.1"
     ams_port: int = 851
     host: str = "127.0.0.1"

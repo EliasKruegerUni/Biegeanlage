@@ -53,22 +53,21 @@ class Bridge:
         self._alarm_keys: dict[tuple, dict] = {}
         self._life_last = None
         self._life_t = 0.0
+        self._life_stuck = False
+        self._hb_failed = False
         self.plc_ok = False
         self.logbuf: deque = deque(maxlen=1000)
         self.plans: dict[int, dict] = {}
-        self._next_plan_id = 1
+        # Plan-IDs zeitbasiert, damit nach einem Neustart des Backends keine ID doppelt vergeben wird,
+        # die die SPS noch als aktiven Plan hält
+        self._next_plan_id = int(time.time()) % 1_000_000 + 1
         self._tasks: list[asyncio.Task] = []
         self._jog_active = False
 
     # ── Lebenszyklus ────────────────────────────────────────────────────
     async def start(self):
-        await asyncio.to_thread(self.link.connect)
-        st = await asyncio.to_thread(self.link.read_status)
-        self._cmd_id = st.stCmdAck.nAckId          # Beim Start nCmdId auf nAckId setzen
-        await asyncio.to_thread(self.link.write_cmd_id, self._cmd_id)
-        self.log("info", "Backend", f"Biegbert-Backend {__version__} gestartet, SPS-Anbindung: {self.link.kind}")
-        if self.link.kind == "sim":
-            self.log("warning", "Backend", "SPS-Simulation aktiv – keine echte Steuerung verbunden")
+        self.log("info", "Backend", f"Biegbert-Backend {__version__} gestartet, SPS über {self.link.kind}")
+        await self._connect()
         loop = asyncio.get_running_loop()
         self._tasks = [loop.create_task(self._poll_loop()), loop.create_task(self._heartbeat_loop()),
                        loop.create_task(self._vis_loop())]
@@ -77,6 +76,23 @@ class Bridge:
         for t in self._tasks:
             t.cancel()
         await asyncio.to_thread(self.link.close)
+
+    async def _connect(self) -> bool:
+        """Verbindung (neu) aufbauen und den Kommandozähler synchronisieren (nCmdId := nAckId)."""
+        try:
+            await asyncio.to_thread(self.link.connect)
+            st = await asyncio.to_thread(self.link.read_status)
+            self._cmd_id = st.stCmdAck.nAckId
+            await asyncio.to_thread(self.link.write_cmd_id, self._cmd_id)
+            self._life_last = None
+            self._life_stuck = False
+            return True
+        except Exception as e:  # noqa: BLE001
+            if self.plc_ok or not getattr(self, "_conn_warned", False):
+                self.log("error", "SPS", f"SPS nicht erreichbar ({e}) – TwinCAT im Run-Modus und SPS gestartet? "
+                                         "Neuer Versuch alle 2 s")
+                self._conn_warned = True
+            return False
 
     def set_sender(self, fn):
         self._send = fn
@@ -138,12 +154,15 @@ class Bridge:
                 self.log("info" if alive else "warning", "Backend",
                          "Browser-Heartbeat vorhanden – zähle nHeartbeat" if alive
                          else "Kein Browser-Heartbeat – nHeartbeat wird nicht mehr erhöht (SPS stoppt nach 500 ms)")
-            if alive:
+            if alive and self.plc_ok:
                 self._hb = (self._hb + 1) & 0xFFFFFFFF
                 try:
                     await asyncio.to_thread(self.link.write_heartbeat, self._hb)
+                    self._hb_failed = False
                 except Exception as e:  # noqa: BLE001
-                    self.log("error", "ADS", f"Heartbeat schreiben fehlgeschlagen: {e}")
+                    if not self._hb_failed:  # nur den ersten Fehler einer Serie melden
+                        self.log("error", "ADS", f"Heartbeat schreiben fehlgeschlagen: {e}")
+                    self._hb_failed = True
             await asyncio.sleep(period)
 
     async def _poll_loop(self):
@@ -161,14 +180,16 @@ class Bridge:
                     self._update_alarms(al)
                 if not self.plc_ok:
                     self.plc_ok = True
-                    self.log("info", "SPS", "Verbindung zur SPS hergestellt")
+                    self._conn_warned = False
+                    self.log("info", "SPS", "Verbindung zur SPS hergestellt" + (" (SPS im Simulationsbetrieb)" if st.bSimulation else ""))
             except Exception as e:  # noqa: BLE001
                 if self.plc_ok:
                     self.log("error", "SPS", f"Lesen von GVL_HMI fehlgeschlagen: {e}")
                 self.plc_ok = False
                 self.status_json = {**self.status_json, "type": "status", "plc": {"kind": self.link.kind, "ok": False}}
                 self.broadcast(self.status_json)
-                await asyncio.sleep(1.0)
+                await asyncio.sleep(2.0)
+                await self._connect()
             await asyncio.sleep(period)
 
     def _check_life(self, st: ST_HmiStatus):
@@ -179,17 +200,20 @@ class Bridge:
                 self.log("warning", "SPS", "nLifeCounter zurückgesprungen – SPS neu gestartet, synchronisiere Kommandozähler")
                 self._cmd_id = st.stCmdAck.nAckId
             if lc == self._life_last:
-                if now - self._life_t > 1.0 and self.plc_ok:
+                if now - self._life_t > 1.0 and self.plc_ok and not self._life_stuck:
                     self.log("error", "SPS", "nLifeCounter steht seit > 1 s – SPS läuft nicht?")
-                    self._life_t = now + 1e9
+                    self._life_stuck = True
             else:
+                if self._life_stuck:
+                    self.log("info", "SPS", "nLifeCounter läuft wieder – SPS arbeitet")
+                    self._life_stuck = False
                 self._life_t = now
         else:
             self._life_t = now
         self._life_last = lc
 
     async def _vis_loop(self):
-        """Achswerte für die 3D-Visualisierung (frontend/index.html, Protokoll „axes“)."""
+        """Achswerte für die 3D-Visualisierung (frontend/simulation.html, Protokoll „axes“)."""
         period = TIMING.vis_rate_ms / 1000
         open_mm = {E_ClampState.Open: 60.0, E_ClampState.Opening: 35.0, E_ClampState.Closing: 35.0,
                    E_ClampState.Clamped: 10.5, E_ClampState.Fault: 35.0, E_ClampState.Unknown: 60.0}
@@ -394,9 +418,9 @@ class Bridge:
             return {"ok": False, "text": f"Plan {plan_id} nicht vorhanden oder fehlerhaft"}
         try:
             await asyncio.to_thread(self.link.transfer_plan, rec["machine"])
-        except NotImplementedError as e:
-            self.log("error", "Plan", str(e))
-            return {"ok": False, "text": str(e)}
+        except Exception as e:  # noqa: BLE001
+            self.log("error", "Plan", f"Plan {plan_id} nicht an die SPS übertragen: {e}")
+            return {"ok": False, "text": f"Übertragung fehlgeschlagen: {e}"}
         r = await self.command("PlanLoad", value=int(plan_id), source="Plan")
         if r["ok"]:
             m = rec["machine"]["material"]
@@ -439,8 +463,8 @@ class Bridge:
                 "                             beliebiges E_HmiCmd senden, z. B. cmd AxisEnable axis=X\n"
                 "  ack                        alle Alarme quittieren\n"
                 "  plans | plan <id>          Pläne anzeigen\n"
-                "  fault <n>                  Simulation: 1 Achsfehler Z1, 2 X, 3 A, 4 Druckabfall, 5 Not-Halt, 6 Schleppfehler\n"
-                "  input <n> <0|1>            Simulation: 1 Druckschalter, 2 Not-Halt\n"
+                "  fault <n>                  nur SPS mit SIM: 1 Achsfehler Z1, 2 X, 3 A, 4 Druckabfall, 5 Not-Halt, 6 Schleppfehler\n"
+                "  input <n> <0|1>            nur SPS mit SIM: 1 Druckschalter, 2 Not-Halt\n"
                 "  cmds                       Liste aller Kommandos")}
         if c == "status":
             s = self.status_json

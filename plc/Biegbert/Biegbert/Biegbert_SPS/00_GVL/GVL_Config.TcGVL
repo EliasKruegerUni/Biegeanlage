@@ -1,7 +1,8 @@
 ﻿<?xml version="1.0" encoding="utf-8"?>
 <TcPlcObject Version="1.1.0.1">
   <GVL Name="GVL_Config" Id="{35d1990a-8d83-482a-9840-8d39c2209e5b}">
-    <Declaration><![CDATA[// Feste Konfigurationswerte. Startwerte, in Phase 4 prüfen.
+    <Declaration><![CDATA[// Feste Konfigurationswerte. Werte mit VORLÄUFIG stammen aus Doku/CAD und werden an der Anlage ersetzt.
+// Gleiche Werte stehen im Backend in backend/biegbert/config.py (siehe 04_Datenfluss_und_Zustaende, Kap. 6).
 {attribute 'qualified_only'}
 VAR_GLOBAL CONSTANT
     cAxisCount           : INT  := 5;
@@ -9,6 +10,35 @@ VAR_GLOBAL CONSTANT
     cAlarmSlots          : INT  := 32;
     tHeartbeatTimeout    : TIME := T#500MS;
     tTwoStepConfirmation : TIME := T#10S;
+
+    // Achsen, Index = E_Axis (1 Z1, 2 Z2, 3 X, 4 A, 5 W). VORLÄUFIG.
+    // W ist in der NC eine Rundachse OHNE Modulo; die SPS rechnet die Anzeige auf 0..360°.
+    aAxisMin        : ARRAY[1..5] OF LREAL := [-30.0, -50.0, -50.0, -60.0, -1.0E9];
+    aAxisMax        : ARRAY[1..5] OF LREAL := [1282.0, 48.0, 50.0, 60.0, 1.0E9];
+    aAxisVMax       : ARRAY[1..5] OF LREAL := [50.0, 28.6, 3.5, 180.0, 180.0];   // mm/s bzw. °/s
+    aAxisVSetup     : ARRAY[1..5] OF LREAL := [30.0, 10.0, 3.5, 20.0, 30.0];    // Einrichtgeschwindigkeit bei 100 %
+    aAxisAccel      : ARRAY[1..5] OF LREAL := [200.0, 100.0, 20.0, 360.0, 360.0];
+    aRatedTorque_Nm : ARRAY[1..5] OF LREAL := [15.2, 1.2, 1.37, 2.38, 1.37];  // Motor-Nennmoment (Bezug von 0x6077), VORLÄUFIG
+    fPosTol         : LREAL := 0.05;   // mm bzw. °
+
+    // Prozessgeometrie (CAD-Auswertung 24.11.2026). VORLÄUFIG.
+    fVAtZ2Zero_mm       : LREAL := 24.0;     // Werkzeugabstand v bei Z2 = 0
+    fZ1CollisionBase_mm : LREAL := 743.25;   // Z1-Grenze Futter <-> Führung bei Z2 = 0
+    // Z1-Bereich, in dem das Futter die Zone des Niederhalterpaares 1..3 berührt (Paar k = NH 2k-1, 2k)
+    aClampZoneLo_mm : ARRAY[1..3] OF LREAL := [508.25, 278.5, 50.5];
+    aClampZoneHi_mm : ARRAY[1..3] OF LREAL := [710.75, 481.0, 253.0];
+    tClampSwitchSim : TIME := T#120MS;   // Schaltzeit im Simulationsmodell
+    tClampSwitch    : TIME := T#120MS;   // Mindestzeit bis „geklemmt“ (DFM-50, an der Anlage messen)
+    tClampTimeout   : TIME := T#1S;      // Zeitüberwachung Öffnen/Schließen
+
+    fForceLimitMax_N : LREAL := 25000.0;
+
+    // Planübergabe (muss zu backend/biegbert/plc/layout.py passen)
+    cPlanFormat  : UINT := 1;
+    cMaxSections : INT := 16;
+    cMaxFeed     : INT := 8;
+    cMaxRot      : INT := 16;
+    cMaxPoints   : INT := 4000;
 END_VAR
 ]]></Declaration>
   </GVL>

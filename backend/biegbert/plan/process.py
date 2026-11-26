@@ -11,8 +11,10 @@ Vereinfachungen (VORLÄUFIG, mit Versuchen ersetzen):
   - keine Rückfederungs- oder Elastizitätskorrektur
   - A = a_factor · φ_tan(u, v)
 
-Der Maschinenplan erweitert das Format aus kinematik.md um „feed_mm_s“ je Biegung
-und „rotations“: [{"z1_mm", "w_deg"}] (relative Drehung von W).
+Der Maschinenplan erweitert das Format aus kinematik.md um „feed_mm_s“ (kleinster Vorschub),
+„feed_profile“: [{"z1_mm", "feed_mm_s"}] und „rotations“: [{"z1_mm", "w_deg"}] (relative Drehung von W).
+Ein Plan ist EIN Abschnitt (eine Kurvenscheibe von z1_start bis z1_fin, Geraden mit u = 0); mehrere
+Abschnitte sind nur bei wechselndem Z2 nötig (noch nicht erzeugt).
 """
 from __future__ import annotations
 
@@ -24,6 +26,9 @@ from .model import GeoPlan
 DS = 0.5           # Abtastschritt in mm
 TOL_U = 0.005      # Toleranz beim Ausdünnen (mm)
 TOL_PHI = 0.02     # (°)
+MAX_POINTS = 4000  # = GVL_Config.cMaxPoints
+MAX_ROT = 16       # = GVL_Config.cMaxRot
+MAX_FEED = 8       # = GVL_Config.cMaxFeed
 
 
 def u_from_kappa(kappa: float, v: float) -> float:
@@ -132,6 +137,10 @@ def build(geo: GeoPlan, plan_id: int, z1_start: float = 0.0) -> tuple[dict | Non
 
     n = max(2, int(math.ceil((s_end - z1_start) / DS)) + 1)
     grid = [z1_start + (s_end - z1_start) * k / (n - 1) for k in range(n)]
+    # Rotationspositionen exakt als Stützstellen (dort steht der Master, u muss 0 sein)
+    extra = [r["s"] for r in rotations if z1_start < r["s"] < s_end]
+    if extra:
+        grid = sorted(set(grid) | set(extra))
     u = [u_raw(x) for x in grid]
     half = pr.transition_mm / 2
     shortened = set()
@@ -182,7 +191,9 @@ def build(geo: GeoPlan, plan_id: int, z1_start: float = 0.0) -> tuple[dict | Non
             break
     phi = [pr.a_factor * phi_from_u(x, v) for x in u]
 
-    # 3) Biegungen = zusammenhängende Bereiche mit u ≠ 0; Geraden dazwischen fährt die SPS ungekoppelt an
+    # 3) Eine Kurvenscheibe für den ganzen Plan (Z2 konstant): Geraden sind Abschnitte mit u = 0, damit der
+    #    Vorschub zwischen Bögen nicht hält. Zusammenhängende Bereiche mit u ≠ 0 („Zonen“) bekommen einen
+    #    Vorschub, bei dem X höchstens 95 % von v_max braucht; dazwischen gilt der Plan-Vorschub.
     active = [abs(x) > 1e-6 for x in u]
     zones, k = [], 0
     while k < len(grid):
@@ -193,32 +204,40 @@ def build(geo: GeoPlan, plan_id: int, z1_start: float = 0.0) -> tuple[dict | Non
             zones.append((max(0, k0 - 1), min(len(grid) - 1, k)))
         else:
             k += 1
-    bends = []
-    rot_queue = sorted(rotations, key=lambda r: r["s"])
+    # Stützpunkte: an Zonengrenzen und Rotationen festhalten, dazwischen ausdünnen
+    keep = {0, len(grid) - 1}
+    for k0, k1 in zones:
+        keep |= {k0, k1}
+    for r in rotations:
+        keep.add(min(range(len(grid)), key=lambda i: abs(grid[i] - r["s"])))
+    keep = sorted(keep)
+    pts = []
+    for i0, i1 in zip(keep, keep[1:]):
+        part = _rdp([(grid[k], u[k], phi[k]) for k in range(i0, i1 + 1)])
+        pts.extend(part if not pts else part[1:])
+    feed_profile = [(z1_start, pr.feed_mm_s)]
     for zi, (k0, k1) in enumerate(zones):
-        pts = _rdp([(grid[k], u[k], phi[k]) for k in range(k0, k1 + 1)])
-        zs, ze = pts[0][0], pts[-1][0]
-        slope = max((abs(pts[j + 1][1] - pts[j][1]) / (pts[j + 1][0] - pts[j][0])
-                     for j in range(len(pts) - 1) if pts[j + 1][0] > pts[j][0]), default=0.0)
+        zp = [(grid[k], u[k]) for k in range(k0, k1 + 1)]
+        slope = max((abs(zp[j + 1][1] - zp[j][1]) / (zp[j + 1][0] - zp[j][0])
+                     for j in range(len(zp) - 1) if zp[j + 1][0] > zp[j][0]), default=0.0)
         feed = pr.feed_mm_s
         if slope * feed > AXES["X"].v_max:
             feed = 0.95 * AXES["X"].v_max / slope
             msg("warning", f"Biegung {zi + 1}: Vorschub auf {feed:.1f} mm/s reduziert, "
                            f"sonst überschreitet X {AXES['X'].v_max} mm/s (Übergang verlängern hilft)")
-        rots = []
-        while rot_queue and rot_queue[0]["s"] <= ze + 1e-9:
-            r = rot_queue.pop(0)
-            rots.append({"z1_mm": round(max(r["s"], zs), 3), "w_deg": r["w"]})
-        bends.append(_bend(zs, ze, pr.z2_mm, feed, pts, rots))
-    # Rest: gerader Auslauf bis Planende (und dort liegende Rotationen)
-    last_end = bends[-1]["z1_fin_mm"] if bends else z1_start
-    if s_end - last_end > 0.5 or rot_queue:
-        if rot_queue:
-            msg("warning", "Rotation am Planende ohne nachfolgenden Bogen – geometrisch ohne Wirkung")
-        rots = [{"z1_mm": round(max(r["s"], last_end), 3), "w_deg": r["w"]} for r in rot_queue]
-        if s_end - last_end > 0.5:
-            bends.append(_bend(last_end, s_end, pr.z2_mm, pr.feed_mm_s,
-                               [(last_end, 0.0, 0.0), (s_end, 0.0, 0.0)], rots))
+        feed_profile.append((grid[k0], feed))
+        if k1 < len(grid) - 1:
+            feed_profile.append((grid[k1], pr.feed_mm_s))
+    feed_profile = _merge_feed(feed_profile, MAX_FEED)
+    if len(pts) > MAX_POINTS:
+        msg("error", f"{len(pts)} Stützpunkte, die SPS nimmt höchstens {MAX_POINTS} je Plan")
+    if len(rotations) > MAX_ROT:
+        msg("error", f"{len(rotations)} Rotationen, die SPS nimmt höchstens {MAX_ROT} je Plan")
+    if rotations and rotations[-1]["s"] >= s_end - 1e-9:
+        msg("warning", "Rotation am Planende ohne nachfolgenden Bogen – geometrisch ohne Wirkung")
+    bends = [_bend(z1_start, s_end, pr.z2_mm, min(f for _, f in feed_profile), pts,
+                   [{"z1_mm": round(r["s"], 3), "w_deg": r["w"]} for r in sorted(rotations, key=lambda r: r["s"])])]
+    bends[0]["feed_profile"] = [{"z1_mm": round(z, 3), "feed_mm_s": round(f, 3)} for z, f in feed_profile]
     z1_lim = GEOMETRY.z1_max(pr.z2_mm)
     if s_end > z1_lim:
         msg("error", f"Plan endet bei Z1 = {s_end:.1f} mm, Grenze (Futter ↔ Führung) bei {z1_lim:.1f} mm")
@@ -250,9 +269,27 @@ def build(geo: GeoPlan, plan_id: int, z1_start: float = 0.0) -> tuple[dict | Non
     rep["centerline"] = centerline(grid, u, v, rotations, z1_start)
     rep["summary"] = {"length_mm": round(s_end - z1_start, 2), "z1_start_mm": round(z1_start, 2),
                       "z1_end_mm": round(s_end, 2), "z1_limit_mm": round(z1_lim, 2), "v_mm": round(v, 3),
-                      "bends": len([b for b in bends if any(abs(p["u_mm"]) > 0 for p in b["points"])]),
+                      "bends": sum(1 for e in geo.elements if e.type in ("bend", "bend_var")),
                       "machine_sections": len(bends), "points": sum(len(b["points"]) for b in bends)}
     return (machine if ok else None), rep
+
+
+def _merge_feed(profile: list[tuple[float, float]], n_max: int) -> list[tuple[float, float]]:
+    """Gleiche Nachbarn zusammenfassen; bei mehr als n_max Einträgen benachbarte Bereiche mit dem kleineren
+    Vorschub vereinen (immer das Paar mit dem kleinsten Unterschied)."""
+    out: list[tuple[float, float]] = []
+    for z, f in profile:
+        if out and abs(out[-1][1] - f) < 1e-9:
+            continue
+        if out and abs(out[-1][0] - z) < 1e-9:
+            out[-1] = (z, min(out[-1][1], f))
+            continue
+        out.append((z, f))
+    while len(out) > n_max:
+        j = min(range(len(out) - 1), key=lambda i: abs(out[i][1] - out[i + 1][1]))
+        out[j] = (out[j][0], min(out[j][1], out[j + 1][1]))
+        del out[j + 1]
+    return out
 
 
 def _bend(zs, ze, z2, feed, pts, rots) -> dict:

@@ -4,59 +4,111 @@
     <Declaration><![CDATA[// Einzige Schnittstelle des Ablaufs zur Achskopplung. Details: docs/kinematik.md
 INTERFACE I_Kinematics
 ]]></Declaration>
-    <Method Name="Cyclic" Id="{543df196-94a7-4eac-8d9c-351899186b58}">
+    <Method Name="Cyclic" Id="{5ff6501c-e7b5-5368-a3a5-5426dfc9aa2c}">
       <Declaration><![CDATA[METHOD Cyclic
 // Einmal pro SPS-Zyklus aufrufen.
 VAR_INPUT
 END_VAR
 ]]></Declaration>
     </Method>
-    <Method Name="LoadPlan" Id="{acaff851-9f80-45c6-92da-2bbe68bb6bca}">
+    <Method Name="LoadPlan" Id="{a7d084e2-8bb5-5cd6-ab5b-bbfad6b21f43}">
       <Declaration><![CDATA[METHOD LoadPlan : BOOL
-// TRUE, wenn der Plan angenommen wurde. Nur im Modus Single.
+// Aktiven Plan (GVL_Plan.stActive) mit dieser ID übernehmen. Nur entkoppelt.
 VAR_INPUT
     nPlanId : UDINT;
 END_VAR
 ]]></Declaration>
     </Method>
-    <Method Name="Start" Id="{f446ab69-f4e0-49cb-9e39-a4fb6224f1ea}">
-      <Declaration><![CDATA[METHOD Start : BOOL
-// Koppelt die Slaves an der aktuellen Masterposition und startet den Master.
+    <Method Name="LoadSection" Id="{3dfa17f9-91ed-5fc6-8a1a-bd2b1ac01ae8}">
+      <Declaration><![CDATA[METHOD LoadSection : BOOL
+// Kurvenscheiben des Abschnitts nSection laden. Nur entkoppelt; fertig, wenn TableReady() TRUE meldet.
+VAR_INPUT
+    nSection : INT;
+END_VAR
+]]></Declaration>
+    </Method>
+    <Method Name="TableReady" Id="{d8fceddd-56a1-5270-932b-97cdf7569951}">
+      <Declaration><![CDATA[METHOD TableReady : BOOL
 VAR_INPUT
 END_VAR
 ]]></Declaration>
     </Method>
-    <Method Name="Hold" Id="{741b9eec-8c30-4769-bfa3-1572eb2525b6}">
+    <Method Name="Start" Id="{d830ff77-cb65-5116-9c0a-2bfdcec02fd3}">
+      <Declaration><![CDATA[METHOD Start : BOOL
+// Koppelt X und A an Z1 und startet den Master.
+VAR_INPUT
+END_VAR
+]]></Declaration>
+    </Method>
+    <Method Name="Hold" Id="{96cda0db-d84f-5c41-8a73-c4e3bd3aa973}">
       <Declaration><![CDATA[METHOD Hold : BOOL
 // Bremst den Master. Die Kopplung bleibt bestehen.
 VAR_INPUT
 END_VAR
 ]]></Declaration>
     </Method>
-    <Method Name="Resume" Id="{47a33e7f-d1a9-42f2-9dfd-419cfc490243}">
+    <Method Name="Resume" Id="{6d8827b9-0e6a-5f1e-a3c5-9876d793655f}">
       <Declaration><![CDATA[METHOD Resume : BOOL
-// Setzt den Master aus dem Halt fort.
+// Setzt den Master aus dem Halt fort (nicht an einer offenen Rotation oder am Abschnittsende).
 VAR_INPUT
 END_VAR
 ]]></Declaration>
     </Method>
-    <Method Name="Abort" Id="{139f377e-9ff4-4892-8121-730c9f7e26fb}">
+    <Method Name="AtRotation" Id="{460217e9-8a87-5886-918f-8533ac6f4f8c}">
+      <Declaration><![CDATA[METHOD AtRotation : BOOL
+// Master steht an einer Rotationsposition; RotationAngle() liefert den Drehwinkel für W.
+VAR_INPUT
+END_VAR
+]]></Declaration>
+    </Method>
+    <Method Name="RotationAngle" Id="{f76901e6-6a2f-55de-a766-78d83766bfe6}">
+      <Declaration><![CDATA[METHOD RotationAngle : LREAL
+VAR_INPUT
+END_VAR
+]]></Declaration>
+    </Method>
+    <Method Name="ContinueAfterRotation" Id="{b7699b80-92df-5aad-8221-cd28c18d69e8}">
+      <Declaration><![CDATA[METHOD ContinueAfterRotation : BOOL
+VAR_INPUT
+END_VAR
+]]></Declaration>
+    </Method>
+    <Method Name="SectionDone" Id="{9ee8b7a2-2774-5239-8ca5-ea486bb079d4}">
+      <Declaration><![CDATA[METHOD SectionDone : BOOL
+// Master steht am Ende des Abschnitts, Kopplung besteht noch.
+VAR_INPUT
+END_VAR
+]]></Declaration>
+    </Method>
+    <Method Name="Abort" Id="{c807c0fd-8651-58b7-800f-706843c63d1b}">
       <Declaration><![CDATA[METHOD Abort : BOOL
 // Stoppt den Master und löst die Kopplung.
 VAR_INPUT
 END_VAR
 ]]></Declaration>
     </Method>
-    <Method Name="Reset" Id="{dd530390-0355-484f-a7a2-894bd120fa23}">
+    <Method Name="Reset" Id="{98e116bc-6e51-5ba3-88fe-239e21efc8ff}">
       <Declaration><![CDATA[METHOD Reset : BOOL
-// Quittiert einen Fehler der Kinematik.
+// Quittiert einen Fehler der Kinematik. Der Plan bleibt erhalten.
 VAR_INPUT
 END_VAR
 ]]></Declaration>
     </Method>
-    <Method Name="GetStatus" Id="{40b54727-0c93-48d9-8a43-537c4322e8cb}">
+    <Method Name="Unload" Id="{ee67441f-f2dd-5594-a8a8-d045785b30b4}">
+      <Declaration><![CDATA[METHOD Unload : BOOL
+// Plan verwerfen (nur entkoppelt).
+VAR_INPUT
+END_VAR
+]]></Declaration>
+    </Method>
+    <Method Name="IsCoupled" Id="{9fe684e1-fcf7-513c-8ee7-b2d21522eeb3}">
+      <Declaration><![CDATA[METHOD IsCoupled : BOOL
+VAR_INPUT
+END_VAR
+]]></Declaration>
+    </Method>
+    <Method Name="GetStatus" Id="{01362359-882e-5793-8949-44ea05380c9a}">
       <Declaration><![CDATA[METHOD GetStatus : ST_KinStatus
-// Aktueller Status.
 VAR_INPUT
 END_VAR
 ]]></Declaration>

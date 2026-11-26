@@ -1,7 +1,7 @@
 ﻿<?xml version="1.0" encoding="utf-8"?>
 <TcPlcObject Version="1.1.0.1">
   <DUT Name="E_AlarmCode" Id="{8a1e6f91-0951-4549-a823-213cb38eb51c}">
-    <Declaration><![CDATA[// Alarmcodes. Die Texte liegen im Backend.
+    <Declaration><![CDATA[// Alarmcodes. Die Texte liegen im Backend (backend/biegbert/alarms.py).
 {attribute 'qualified_only'}
 {attribute 'strict'}
 {attribute 'to_string'}
@@ -20,10 +20,11 @@ TYPE E_AlarmCode :
     ClampPressureLow := 3001, // Klemmdruck fehlt
     ClampZoneViolation := 3002, // 4BF-Zone bei geschlossenem Niederhalter
     DistanceZ1Z2 := 4000, // dZ12 unterschritten
-    KinCoupleFailed := 5000, // Kopplung fehlgeschlagen
+    KinCoupleFailed := 5000, // Kopplung oder Kurvenscheibe fehlgeschlagen, nDetail = NC-Fehlercode
     KinMasterFault := 5001, // Master Z1 gestört
     KinSlaveFault := 5002, // Slave gestört
-    KinPositionDeviation := 5003 // Achse weicht vor Wiederanlauf vom Plan ab
+    KinPositionDeviation := 5003, // Achse weicht vor Wiederanlauf vom Plan ab
+    SeqStepTimeout := 6001 // Schritt hängt, nDetail = Schrittnummer
 ) UDINT;
 END_TYPE
 ]]></Declaration>

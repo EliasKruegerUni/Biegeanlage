@@ -34,24 +34,25 @@ def test_plan_structure_and_limits():
     m, rep = build(g, 7, 0.0)
     assert m and rep["ok"]
     assert m["plan_id"] == 7 and m["format"] == 1
-    last = -1e9
-    for b in m["bends"]:
-        s = [p["s_mm"] for p in b["points"]]
-        assert all(a < c for a, c in zip(s, s[1:]))          # streng monoton je Biegung
-        assert s[0] >= last - 1e-9                            # Biegungen überlappen nicht
-        last = s[-1]
-        # X-Geschwindigkeit beim gewählten Vorschub ≤ 3,5 mm/s
-        slope = max(abs(q["u_mm"] - p["u_mm"]) / (q["s_mm"] - p["s_mm"]) for p, q in zip(b["points"], b["points"][1:]))
-        assert slope * b["feed_mm_s"] <= 3.5 + 1e-6
-    u_max = max(abs(p["u_mm"]) for p in m["bends"][0]["points"])
+    assert len(m["bends"]) == 1                               # eine Kurvenscheibe für den ganzen Plan
+    b = m["bends"][0]
+    s = [p["s_mm"] for p in b["points"]]
+    assert all(a < c for a, c in zip(s, s[1:]))              # streng monoton
+    # X-Geschwindigkeit beim jeweils gültigen Vorschub ≤ 3,5 mm/s
+    fp = b["feed_profile"]
+    for p, q in zip(b["points"], b["points"][1:]):
+        feed = [f["feed_mm_s"] for f in fp if f["z1_mm"] <= p["s_mm"] + 1e-6][-1]
+        assert abs(q["u_mm"] - p["u_mm"]) / (q["s_mm"] - p["s_mm"]) * feed <= 3.5 * 1.05
+    u_max = max(abs(p["u_mm"]) for p in b["points"])
     assert u_max == pytest.approx(7.0, abs=0.01)
-    # Rotation sitzt im zweiten Bogen, dort wo u = 0 ist
-    rots = [r for b in m["bends"] for r in b["rotations"]]
-    assert len(rots) == 1 and rots[0]["w_deg"] == 90
-    b2 = m["bends"][1]
-    assert b2["points"][0]["u_mm"] == 0 and rots[0]["z1_mm"] >= b2["z1_start_mm"]
-    # Biegung in −X-Richtung
-    assert min(p["u_mm"] for p in b2["points"]) < -1
+    # Rotation an der Stelle mit u = 0, danach Bogen in −X-Richtung
+    assert len(b["rotations"]) == 1 and b["rotations"][0]["w_deg"] == 90
+    zr = b["rotations"][0]["z1_mm"]
+    u_at = min(b["points"], key=lambda p: abs(p["s_mm"] - zr))["u_mm"]
+    assert abs(u_at) < 1e-6
+    assert min(p["u_mm"] for p in b["points"] if p["s_mm"] > zr) < -1
+    # Geraden laufen mit dem Plan-Vorschub, Bögen gebremst
+    assert fp[0]["feed_mm_s"] == 30 and min(f["feed_mm_s"] for f in fp) < 30
 
 
 def test_centerline_angle():

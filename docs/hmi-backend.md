@@ -1,14 +1,14 @@
 # HMI und Backend
 
-Stand: 24.11.2026, erste Fassung. Ergänzt `hmi-schnittstelle.md` (SPS-Seite) um die Seite Browser ↔ Python.
+Stand: 25.11.2026. Die SPS-Simulation im Backend ist entfernt; das Backend spricht nur noch über ADS mit TwinCAT (echte Anlage oder TwinCAT im Simulationsbetrieb, siehe `twincat-einrichtung.md`). Ergänzt `hmi-schnittstelle.md` (SPS-Seite) um die Seite Browser ↔ Python.
 
 ## Starten
 
 ```powershell
 .\.venv\Scripts\Activate.ps1
 cd backend
-python -m biegbert              # SPS-Simulation
-python -m biegbert --plc ads --ams <AMS-Net-ID>   # echte SPS (noch ungetestet)
+python -m biegbert                     # TwinCAT auf diesem Rechner (lokale AMS-Net-ID)
+python -m biegbert --ams <AMS-Net-ID>  # TwinCAT auf dem Anlagen-PC (ADS-Route nötig)
 ```
 
 | Adresse | Inhalt |
@@ -28,20 +28,19 @@ Tests: `pytest` im Repo-Wurzelordner (`pytest.ini` setzt `backend` in den Pfad).
 | `backend/biegbert/bridge.py` | Handshake, Heartbeat, Status, Alarme, Pläne, Debug-Konsole |
 | `backend/biegbert/plc/hmi_types.py` | Spiegel der Enums und Strukturen aus `01_DUT` |
 | `backend/biegbert/plc/layout.py` | Byte-Layout `pack_mode 1`, Lesen ganzer Strukturen über ADS |
-| `backend/biegbert/plc/ads.py` | Echte SPS über pyads, Zugriff nur auf `GVL_HMI.*` |
-| `backend/biegbert/plc/sim.py` | SPS-Simulation mit dem Verhalten von `GVL_HMI` |
+| `backend/biegbert/plc/ads.py` | SPS über pyads, Zugriff nur auf `GVL_HMI.*`, Planübergabe nach `stPlanXfer` |
 | `backend/biegbert/plan/` | Biegeplan-Modell, LRA-Import, Prozessmodell (Geometrie → Maschinenplan) |
 | `backend/biegbert/config.py` | Achsgrenzen, Geschwindigkeiten, Geometrie, Zeiten; vorläufige Werte markiert |
 | `backend/biegbert/alarms.py` | Klartexte für Alarme, Ergebnisse und Ablaufschritte |
 
-Die Bridge kennt nur `PlcLink`. Simulation und ADS sind austauschbar, ohne dass HMI oder Bridge sich ändern.
+Die Bridge kennt nur `PlcLink`. Läuft TwinCAT nicht, versucht sie alle 2 s neu zu verbinden und synchronisiert danach den Kommandozähler (`nCmdId := nAckId`).
 
 ## Betriebswege im HMI
 
 | Weg | Reiter | Ablauf |
 |---|---|---|
-| 1 CAD/Biegeplan | 1 · Biegeplan | Datei laden (biegbert-geo, Maschinenplan Format 1, LRA/YBC). Das Backend berechnet den Maschinenplan. Dann ① `PlanLoad`, ② `MaterialConfirm`, ③ `SeqStart`, am Ende `SeqConfirmQ1`. STEP-Import folgt |
-| 2 Halbautomatisch | 2 · Halbautomatisch | Elemente eingeben: Gerade, Bogen mit konstantem Radius, Bogen mit veränderlichem Radius, Rotation. „Als Folge“ erzeugt einen Plan für Weg 1. „Schritt für Schritt“ plant und startet jeweils das nächste Element ab der aktuellen Z1-Position |
+| 1 CAD/Biegeplan | 1 · Biegeplan | Datei laden (biegbert-geo, Maschinenplan Format 1, LRA/YBC). Das Backend berechnet den Maschinenplan. Dann ① `PlanLoad`, ② `MaterialConfirm`, ③ `SeqStart`; am Ende `SeqConfirmQ1` (S24), `SeqConfirmQ2` (S25) und `SeqPartRemoved` (S27, Rohr entnommen). STEP-Import folgt |
+| 2 Halbautomatisch | 2 · Halbautomatisch | Elemente eingeben: Gerade, Bogen mit konstantem Radius, Bogen mit veränderlichem Radius, Rotation. „Als Folge“ erzeugt einen Plan für Weg 1. „Schritt für Schritt“ plant und startet jeweils das nächste Element ab der aktuellen Z1-Position. Der erste Schritt startet aus der Grundstellung, jeder weitere als Fortsetzung am selben Rohr aus S27 |
 | 3 Vollmanuell | 3 · Manuell | Betriebsart Einzelachsen. Freigabe, Fahrbefehle, Tippen, Vorschub starten/stoppen, Niederhalter, „A tangential zu X“ |
 
 Ein veränderlicher Radius entsteht in Weg 1 und 2 durch die κ(s)-Tabelle. In Weg 3 entsteht er, indem X während des laufenden Vorschubs verstellt wird.
@@ -76,34 +75,27 @@ Alle Nachrichten sind JSON-Objekte mit `type`. Anfragen mit `id` erhalten eine A
 
 ### Visualisierung `/`
 
-Die 3D-Visualisierung (`frontend/index.html`) verbindet sich mit `ws://<host>:8765/`. Unter `/vis/` liefert das Backend sie selbst aus. Etwa 30-mal pro Sekunde erhält sie:
+Die 3D-Visualisierung (`frontend/simulation.html`) verbindet sich mit `ws://<host>:8765/`. Unter `/vis/` liefert das Backend sie selbst aus. Etwa 30-mal pro Sekunde erhält sie:
 
 ```json
 {"type": "axes",
  "values":  {"Z1": …, "Z2": …, "X": …, "A": …, "W": …, "NH1": …, "NH2": …, "NH3": …},
  "set":     {"Z1": …, "Z2": …, "X": …, "A": …, "W": …},
- "process": {"simulation": true, "plc_kind": "sim", "plc_ok": true, "mode": "Automatic",
+ "process": {"simulation": true, "plc_kind": "ads", "plc_ok": true, "mode": "Automatic",
              "kin": "Running", "plan_id": 3, "bend": 1, "step_g2": 23, "step_g2_text": "…"}}
 ```
 
 Die Visualisierung meldet nichts an die SPS zurück. Slider-Bewegungen in der Visualisierung ignoriert das Backend.
 
-## Simulation: zwei getrennte Dinge
+## Simulation
 
-| | Was wird ersetzt? | Wo | Wählen |
-|---|---|---|---|
-| **SPS-Simulation** | die SPS (TwinCAT) | `backend/biegbert/plc/sim.py` | `python -m biegbert` (Standard) statt `--plc ads` |
-| **Betriebsarten der Visualisierung** | – (Anzeige) | `frontend/index.html` | automatisch oder Umschalter in der Seitenleiste |
+Simuliert wird nur noch in TwinCAT: NC-Achsen ohne Hardware und die Peripherie (Niederhalter, Druck, Not-Halt) im Baustein `FB_IoSim`, aktiv mit dem Compiler-Define `SIM`. Das Backend und das HMI sind in Simulation und Realbetrieb identisch; die SPS meldet den Simulationsbetrieb in `bSimulation`.
 
-Betriebsarten der Visualisierung:
-
-| Betriebsart | Achswerte | Slider | Rohr | Automatische Wahl |
+| Betriebsart der Visualisierung | Achswerte | Slider | Rohr | Automatische Wahl |
 |---|---|---|---|---|
 | Eigenständig | Slider, Biegeversuch mit eigenem Vorschub | aktiv | „Starte Versuch“ setzt Z1 = 0 und legt das Rohr ein | keine Daten vom Backend (Doppelklick ohne Backend) |
-| Anlagenersatz | von der SPS: TwinCAT mit simulierten Achsen oder SPS-Simulation | gesperrt | wird bei Ablaufstart (G2 20–23) automatisch eingelegt, folgt Z1/X/A/W | Daten mit `simulation = true` |
+| Anlagenersatz | TwinCAT mit `SIM` | gesperrt | neues Rohr beim Start aus S20, bleibt bei Fortsetzung aus S27, Teilansicht bei ENT | Daten mit `simulation = true` |
 | Digitaler Zwilling | Istwerte der realen Anlage | gesperrt | wie Anlagenersatz; zusätzlich Soll/Ist-Tabelle | Daten mit `simulation = false` |
-
-Mögliche Kombinationen: HMI-Entwicklung ohne TwinCAT (SPS-Simulation + Anlagenersatz), Test der echten SPS-Logik (TwinCAT mit simulierten Achsen über ADS + Anlagenersatz), Betrieb an der Anlage (TwinCAT real über ADS + Zwilling).
 
 ## Heartbeat
 
@@ -111,38 +103,23 @@ Wie in `hmi-schnittstelle.md`: Der Browser pingt alle 100 ms. Der Takt kommt aus
 
 ## Maschinenplan
 
-Format wie in `kinematik.md`, Abschnitt Biegeplan, mit zwei Erweiterungen:
+Format wie in `kinematik.md`, Abschnitt Biegeplan. Ein Plan ist **ein Abschnitt** = eine Kurvenscheibe von `z1_start_mm` bis `z1_fin_mm`; Geraden sind Teil der Kurvenscheibe (u = 0), dadurch hält der Vorschub zwischen Bögen nicht. Mehrere Abschnitte sind nur bei wechselndem Z2 vorgesehen (noch nicht erzeugt). Erweiterungen je Abschnitt:
 
-| Feld je Biegung | Bedeutung |
+| Feld | Bedeutung |
 |---|---|
-| `feed_mm_s` | Vorschub für diesen Abschnitt. Das Prozessmodell senkt ihn, wenn X sonst schneller als 3,5 mm/s fahren müsste |
-| `rotations` | `[{"z1_mm", "w_deg"}]`, relative Drehung von W bei Erreichen von `z1_mm` (G3) |
+| `feed_profile` | `[{"z1_mm", "feed_mm_s"}]`, höchstens 8 Stufen. In Bögen senkt das Prozessmodell den Vorschub so weit, dass X höchstens 95 % von 3,5 mm/s braucht; Geraden laufen mit dem Plan-Vorschub |
+| `feed_mm_s` | kleinster Vorschub des Profils (Anzeige) |
+| `rotations` | `[{"z1_mm", "w_deg"}]`, höchstens 16; der Master hält dort, W dreht relativ (G3), dann geht es weiter |
+| `clamps`, `clamp_open_mm` | zu Beginn zu schließende Niederhalter und Z1-Position, ab der jeder öffnet |
 
-Gerade Strecken zwischen zwei Biegungen fährt die SPS ungekoppelt beim Anfahren der Startposition. s steigt innerhalb einer Biegung streng monoton; aufeinanderfolgende Biegungen dürfen sich einen Grenzpunkt teilen.
+Übergabe an die SPS: `layout.pack_plan` → `GVL_HMI.stPlanXfer` (103 552 Byte), Kopf mit Prüfsumme zuletzt; die SPS prüft beim `PlanLoad` (`FB_PlanStore`) und meldet Fehler als `nDetail` 1–16. Höchstens 4000 Stützpunkte.
 
 Prozessmodell, vorläufig: u(R) = R − √(R² − v²), φ = a_factor · arcsin(v/R), lineare Rampe von u über `transition_mm` an jeder Elementgrenze, an Rotationen und Planenden abgeschnitten. Keine Rückfederungskorrektur.
 
-## Simulation: Festlegungen, die in die SPS übernommen oder ersetzt werden müssen
-
-Die Simulation braucht Festlegungen, die in der SPS noch fehlen. Sie sind hier gesammelt, damit sie bei der SPS-Programmierung bewusst übernommen oder geändert werden.
-
-| Thema | Festlegung in der Simulation |
-|---|---|
-| Startbetriebsart | `Pause` |
-| Planübergabe | `transfer_plan()` als Ersatz für den Übergabebereich aus Phase 9; die ADS-Anbindung lehnt das ab |
-| `SeqStart` | Automatik, Plan geladen, Material bestätigt, kein Fault, alle Achsen freigegeben, Z1 ≤ Start der ersten Biegung |
-| G2-Schritte | 20 Startposition, 21 Niederhalter schließen, 23 Biegen, 24 Ende halten (wartet auf `SeqConfirmQ1`), 25 Lösen und Biegekopf zurück |
-| G3-Schritte | 30 Halten, 31 W dreht |
-| `nDetail` bei Ablehnung | Alarmcode der Verriegelung (z. B. 1001, 1100, 3002, 4000), Bitmaske `dwBaseStateMissing` (Bit 6 = Fault aktiv), Prüfcode beim Planladen (10–14), `0x10000` + Bit je `E_Axis` = Achse nicht freigegeben oder gestört, `0x20000` = Z1 hinter dem Start der ersten Biegung |
-| `SimInjectFault` `nValue` | 1 Achsfehler Z1, 2 X, 3 A, 4 Druckabfall, 5 Not-Halt, 6 Schleppfehler-Warnung Z1 |
-| `SimSetInput` `nValue` | 1 Druckschalter, 2 Not-Halt (`fPosition` ≠ 0 = aktiv) |
-| Niederhalter-Nummern | Paar k = Niederhalter 2k−1 und 2k, Paar 1 liegt an der Führung (an der Anlage prüfen) |
-| Niederhalter-Schaltzeit | 120 ms |
-
 ## Offene Punkte
 
-- ADS-Anbindung gegen die SPS testen: Strukturgrößen (495 und 777 Byte), Schreibreihenfolge, Notifications statt Polling
-- Übergabebereich für Pläne in `GVL_HMI` (Phase 9) und Behandlung im Schrittbetrieb
-- Festlegungen aus der Tabelle oben in der SPS bestätigen oder ändern
+- ADS-Anbindung an der echten SPS messen: Zeiten für Handshake und Heartbeat, Notifications statt Polling
+- Winkelverlust durch die lineare u-Rampe (Umbau auf winkelerhaltende Rampe vorgeschlagen)
+- Z2 je Bogen im Prozessmodell (Format und SPS können es bereits)
 - STEP-Import
 - Benutzerrollen (Bediener/Einrichter) im Backend
