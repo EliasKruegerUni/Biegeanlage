@@ -1,0 +1,290 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<TcPlcObject Version="1.1.0.1">
+  <POU Name="FB_Axis" Id="{6c5c5577-b34d-50ae-b9cf-a97739dd094a}" SpecialFunc="None">
+    <Declaration><![CDATA[// Kapselt eine NC-Achse: Freigabe, Reset, Absolutfahrt, Tippen, Halt, Zustand für die GUI.
+// Methoden nehmen nur Aufträge an; ausgeführt wird im Rumpf (einmal pro Zyklus aufrufen).
+// Prüfungen gegen Betriebsart und Verriegelungen macht der Aufrufer (FB_HmiCommand, FB_BendSequence).
+FUNCTION_BLOCK FB_Axis
+VAR_INPUT
+    pAxis : POINTER TO AXIS_REF;
+    nIndex : INT;                 // = E_Axis
+    bAllowPower : BOOL;           // FALSE bei Not-Halt: Freigabe wegnehmen
+    bLockedByKin : BOOL;          // gekoppelt über FB_BendKinematics: Einzelbewegungen abweisen
+    fPowerOverride_pct : LREAL := 100.0;
+    bSimFault : BOOL;             // nur Simulation
+    fTorque_Nm : LREAL;
+END_VAR
+VAR_OUTPUT
+    eState : E_AxisState;
+    bEnabled : BOOL;
+    bReady : BOOL;
+    bError : BOOL;
+    nErrorId : UDINT;
+    bBusy : BOOL;                 // eigener Bewegungsauftrag aktiv oder Achse in Bewegung
+    bMoving : BOOL;
+    fActPos : LREAL;
+    fSetPos : LREAL;
+    fActVelo : LREAL;
+    fSetVelo : LREAL;
+    fLag : LREAL;
+    fTarget : LREAL;
+END_VAR
+VAR
+    fbPower : MC_Power;
+    fbReset : MC_Reset;
+    fbMove : MC_MoveAbsolute;
+    fbJog : MC_MoveVelocity;
+    fbHalt : MC_Halt;
+    bEnableCmd : BOOL;
+    bResetReq : BOOL;
+    bMoveReq : BOOL;
+    bMoveActive : BOOL;
+    fMoveVel : LREAL;
+    bJogReq : BOOL;
+    bJogActive : BOOL;
+    fJogVel : LREAL;
+    eJogDir : MC_Direction;
+    bHaltReq : BOOL;
+    bHaltActive : BOOL;
+    fAccel : LREAL;
+END_VAR
+]]></Declaration>
+    <Implementation>
+      <ST><![CDATA[IF pAxis = 0 OR nIndex < 1 OR nIndex > 5 THEN
+    RETURN;
+END_IF
+fAccel := GVL_Config.aAxisAccel[nIndex];
+pAxis^.ReadStatus();
+
+// Fehler
+bError := pAxis^.Status.Error OR bSimFault;
+IF bSimFault AND NOT pAxis^.Status.Error THEN
+    nErrorId := 16#4260;
+ELSE
+    nErrorId := pAxis^.Status.ErrorID;
+END_IF
+IF bSimFault AND (bMoveActive OR bJogActive) THEN
+    bHaltReq := TRUE;
+END_IF
+
+// Reset
+fbReset(Axis := pAxis^, Execute := bResetReq);
+IF fbReset.Done OR fbReset.Error THEN
+    bResetReq := FALSE;
+END_IF
+
+// Freigabe
+fbPower(Axis := pAxis^,
+        Enable := bEnableCmd AND bAllowPower,
+        Enable_Positive := bEnableCmd AND bAllowPower,
+        Enable_Negative := bEnableCmd AND bAllowPower,
+        Override := LIMIT(0.0, fPowerOverride_pct, 100.0));
+bEnabled := fbPower.Status;
+IF NOT bAllowPower THEN
+    // Not-Halt: Freigabe zurücknehmen; danach muss die Achse wieder ausdrücklich freigegeben werden
+    bEnableCmd := FALSE;
+    bMoveActive := FALSE;
+    bJogActive := FALSE;
+END_IF
+
+// Halt (hat Vorrang)
+IF bHaltReq THEN
+    bHaltReq := FALSE;
+    bMoveReq := FALSE;
+    bJogReq := FALSE;
+    bMoveActive := FALSE;
+    bJogActive := FALSE;
+    fbHalt(Axis := pAxis^, Execute := FALSE);
+    bHaltActive := TRUE;
+END_IF
+fbHalt(Axis := pAxis^, Execute := bHaltActive, Deceleration := fAccel);
+IF bHaltActive AND (fbHalt.Done OR fbHalt.Error OR fbHalt.CommandAborted) THEN
+    bHaltActive := FALSE;
+END_IF
+
+// Absolutfahrt
+IF bMoveReq THEN
+    bMoveReq := FALSE;
+    bJogActive := FALSE;
+    fbMove(Axis := pAxis^, Execute := FALSE);
+    bMoveActive := TRUE;
+END_IF
+fbMove(Axis := pAxis^, Execute := bMoveActive, Position := fTarget, Velocity := fMoveVel,
+       Acceleration := fAccel, Deceleration := fAccel);
+IF bMoveActive AND (fbMove.Done OR fbMove.Error OR fbMove.CommandAborted) THEN
+    bMoveActive := FALSE;
+END_IF
+
+// Tippen
+IF bJogReq THEN
+    bJogReq := FALSE;
+    bMoveActive := FALSE;
+    fbJog(Axis := pAxis^, Execute := FALSE);
+    bJogActive := TRUE;
+END_IF
+fbJog(Axis := pAxis^, Execute := bJogActive, Velocity := fJogVel, Direction := eJogDir,
+      Acceleration := fAccel, Deceleration := fAccel);
+IF bJogActive AND (fbJog.Error OR fbJog.CommandAborted) THEN
+    bJogActive := FALSE;
+END_IF
+
+// Istwerte
+fActPos := pAxis^.NcToPlc.ActPos;
+fSetPos := pAxis^.NcToPlc.SetPos;
+fActVelo := pAxis^.NcToPlc.ActVelo;
+fSetVelo := pAxis^.NcToPlc.SetVelo;
+fLag := pAxis^.NcToPlc.PosDiff;
+bMoving := ABS(fActVelo) > 0.001 OR ABS(fSetVelo) > 0.001;
+bBusy := bMoveActive OR bJogActive OR bHaltActive OR bMoving;
+bReady := bEnabled AND NOT bError;
+
+IF bError THEN
+    eState := E_AxisState.Error;
+ELSIF NOT bEnabled THEN
+    eState := E_AxisState.Disabled;
+ELSIF bLockedByKin OR pAxis^.NcToPlc.CoupleState <> 0 THEN
+    eState := E_AxisState.Coupled;
+ELSIF bBusy THEN
+    eState := E_AxisState.Moving;
+ELSE
+    eState := E_AxisState.Standstill;
+END_IF
+]]></ST>
+    </Implementation>
+    <Method Name="Enable" Id="{7d5ac4e5-7216-5c33-a8a6-9c3e0f78d740}">
+      <Declaration><![CDATA[METHOD Enable : BOOL
+VAR_INPUT
+END_VAR
+]]></Declaration>
+      <Implementation>
+        <ST><![CDATA[bEnableCmd := TRUE;
+Enable := TRUE;
+]]></ST>
+      </Implementation>
+    </Method>
+    <Method Name="Disable" Id="{65bb3569-4401-5083-a869-7bfe09e597b0}">
+      <Declaration><![CDATA[METHOD Disable : BOOL
+VAR_INPUT
+END_VAR
+]]></Declaration>
+      <Implementation>
+        <ST><![CDATA[bEnableCmd := FALSE;
+bMoveActive := FALSE;
+bJogActive := FALSE;
+Disable := TRUE;
+]]></ST>
+      </Implementation>
+    </Method>
+    <Method Name="Reset" Id="{7ea2e8b8-524d-590f-a54b-0356fd5040c3}">
+      <Declaration><![CDATA[METHOD Reset : BOOL
+VAR_INPUT
+END_VAR
+]]></Declaration>
+      <Implementation>
+        <ST><![CDATA[bResetReq := TRUE;
+Reset := TRUE;
+]]></ST>
+      </Implementation>
+    </Method>
+    <Method Name="Halt" Id="{6cf35bb4-9d57-5150-915e-e9e8530d243b}">
+      <Declaration><![CDATA[METHOD Halt : BOOL
+VAR_INPUT
+END_VAR
+]]></Declaration>
+      <Implementation>
+        <ST><![CDATA[bHaltReq := TRUE;
+Halt := TRUE;
+]]></ST>
+      </Implementation>
+    </Method>
+    <Method Name="MoveAbs" Id="{b6a07ae9-3290-573c-b303-43013d6614ec}">
+      <Declaration><![CDATA[METHOD MoveAbs : BOOL
+VAR_INPUT
+    fPosition : LREAL;
+    fVelocity : LREAL;
+END_VAR
+]]></Declaration>
+      <Implementation>
+        <ST><![CDATA[IF bLockedByKin OR fVelocity <= 0.0 THEN
+    MoveAbs := FALSE;
+    RETURN;
+END_IF
+fTarget := fPosition;
+fMoveVel := fVelocity;
+bMoveReq := TRUE;
+MoveAbs := TRUE;
+]]></ST>
+      </Implementation>
+    </Method>
+    <Method Name="Jog" Id="{b881677c-275e-5a66-b4bb-4a7689fb1b4e}">
+      <Declaration><![CDATA[METHOD Jog : BOOL
+VAR_INPUT
+    nDirection : INT;     // -1 oder +1
+    fVelocity : LREAL;
+END_VAR
+]]></Declaration>
+      <Implementation>
+        <ST><![CDATA[IF bLockedByKin OR nDirection = 0 OR fVelocity <= 0.0 THEN
+    Jog := FALSE;
+    RETURN;
+END_IF
+IF nDirection > 0 THEN
+    eJogDir := MC_Direction.MC_Positive_Direction;
+ELSE
+    eJogDir := MC_Direction.MC_Negative_Direction;
+END_IF
+IF NOT bJogActive OR ABS(fJogVel - fVelocity) > 1.0E-6 OR fbJog.Direction <> eJogDir THEN
+    fJogVel := fVelocity;
+    bJogReq := TRUE;
+END_IF
+Jog := TRUE;
+]]></ST>
+      </Implementation>
+    </Method>
+    <Method Name="StopJog" Id="{4fbe9347-a9fb-550e-b471-6568879b086e}">
+      <Declaration><![CDATA[METHOD StopJog : BOOL
+VAR_INPUT
+END_VAR
+]]></Declaration>
+      <Implementation>
+        <ST><![CDATA[IF bJogActive OR bJogReq THEN
+    bJogReq := FALSE;
+    bHaltReq := TRUE;
+END_IF
+StopJog := TRUE;
+]]></ST>
+      </Implementation>
+    </Method>
+    <Method Name="IsJogging" Id="{f86e4264-996c-58a9-b242-ef1d99eef7fa}">
+      <Declaration><![CDATA[METHOD IsJogging : BOOL
+VAR_INPUT
+END_VAR
+]]></Declaration>
+      <Implementation>
+        <ST><![CDATA[IsJogging := bJogActive OR bJogReq;
+]]></ST>
+      </Implementation>
+    </Method>
+    <Method Name="AtPosition" Id="{1b81f9e2-7bdf-52da-bc18-273dc0fdac3c}">
+      <Declaration><![CDATA[METHOD AtPosition : BOOL
+VAR_INPUT
+    fPosition : LREAL;
+END_VAR
+]]></Declaration>
+      <Implementation>
+        <ST><![CDATA[AtPosition := ABS(fActPos - fPosition) <= GVL_Config.fPosTol AND NOT bMoving;
+]]></ST>
+      </Implementation>
+    </Method>
+    <Method Name="IsEnableCommanded" Id="{7579fa47-2622-5f21-90b3-9659aab1ce91}">
+      <Declaration><![CDATA[METHOD IsEnableCommanded : BOOL
+VAR_INPUT
+END_VAR
+]]></Declaration>
+      <Implementation>
+        <ST><![CDATA[IsEnableCommanded := bEnableCmd;
+]]></ST>
+      </Implementation>
+    </Method>
+  </POU>
+</TcPlcObject>

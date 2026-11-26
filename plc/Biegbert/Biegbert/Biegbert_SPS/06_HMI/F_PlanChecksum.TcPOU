@@ -1,0 +1,34 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<TcPlcObject Version="1.1.0.1">
+  <POU Name="F_PlanChecksum" Id="{bed62bc6-c982-5784-8116-e62411b00072}" SpecialFunc="None">
+    <Declaration><![CDATA[// Prüfsumme über die belegten Abschnitte und Punkte eines Plans (gleicher Algorithmus in backend/biegbert/plc/layout.py):
+// h := ROL(h, 5) XOR Byte, Startwert 0.
+FUNCTION F_PlanChecksum : DWORD
+VAR_IN_OUT
+    stPlan : ST_PlanTransfer;
+END_VAR
+VAR
+    p : POINTER TO BYTE;
+    n, i : UDINT;
+    h : DWORD;
+END_VAR
+]]></Declaration>
+    <Implementation>
+      <ST><![CDATA[h := 0;
+p := ADR(stPlan.aSection[1]);
+n := UINT_TO_UDINT(stPlan.stHeader.nSectionCount) * SIZEOF(ST_PlanSection);
+FOR i := 1 TO n DO
+    h := ROL(h, 5) XOR BYTE_TO_DWORD(p^);
+    p := p + 1;
+END_FOR
+p := ADR(stPlan.aPoint[1]);
+n := stPlan.stHeader.nPointCount * SIZEOF(ST_PlanPoint);
+FOR i := 1 TO n DO
+    h := ROL(h, 5) XOR BYTE_TO_DWORD(p^);
+    p := p + 1;
+END_FOR
+F_PlanChecksum := h;
+]]></ST>
+    </Implementation>
+  </POU>
+</TcPlcObject>

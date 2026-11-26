@@ -1,0 +1,244 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<TcPlcObject Version="1.1.0.1">
+  <POU Name="FB_AlarmManager" Id="{c0aee4ac-b3c7-5f95-b175-7beeedeaab95}" SpecialFunc="None">
+    <Declaration><![CDATA[// Aktive oder nicht quittierte Alarme (max. 32). Texte und Historie liegen im Backend.
+// Ein Eintrag verschwindet, wenn die Ursache behoben UND der Alarm quittiert ist.
+FUNCTION_BLOCK FB_AlarmManager
+VAR_OUTPUT
+    nStopCounter : UDINT;     // +1 bei jedem neuen Alarm der Stufe Stop oder Fault (G1 wechselt in Pause)
+END_VAR
+VAR
+    aList : ARRAY[1..32] OF ST_AlarmEntry;
+    nCount : INT;
+    nChangeCounter : UDINT;
+    bOverflow : BOOL;
+END_VAR
+]]></Declaration>
+    <Implementation>
+      <ST><![CDATA[// Kein zyklischer Anteil; WriteTo() einmal pro Zyklus aufrufen.
+]]></ST>
+    </Implementation>
+    <Method Name="Find" Id="{df441308-cde5-5f6b-a579-0fb71d8032a6}">
+      <Declaration><![CDATA[METHOD PRIVATE Find : INT
+VAR_INPUT
+    eCode : E_AlarmCode;
+    nSource : DINT;
+END_VAR
+VAR
+    i : INT;
+END_VAR
+]]></Declaration>
+      <Implementation>
+        <ST><![CDATA[Find := 0;
+FOR i := 1 TO nCount DO
+    IF aList[i].eCode = eCode AND aList[i].nSource = nSource THEN
+        Find := i;
+        RETURN;
+    END_IF
+END_FOR
+]]></ST>
+      </Implementation>
+    </Method>
+    <Method Name="Raise" Id="{e76e74c7-db6a-59be-b848-3829df67a39e}">
+      <Declaration><![CDATA[METHOD Raise : BOOL
+VAR_INPUT
+    eCode : E_AlarmCode;
+    eSeverity : E_AlarmSeverity;
+    nSource : DINT;
+    nDetail : UDINT;
+END_VAR
+VAR
+    i : INT;
+END_VAR
+]]></Declaration>
+      <Implementation>
+        <ST><![CDATA[i := Find(eCode, nSource);
+IF i > 0 THEN
+    IF aList[i].bActive THEN
+        RETURN;           // besteht bereits
+    END_IF
+ELSE
+    IF nCount >= 32 THEN
+        bOverflow := TRUE;
+        RETURN;
+    END_IF
+    nCount := nCount + 1;
+    i := nCount;
+    aList[i].eCode := eCode;
+    aList[i].nSource := nSource;
+END_IF
+aList[i].eSeverity := eSeverity;
+aList[i].nDetail := nDetail;
+aList[i].nTimestamp := F_GetSystemTime();
+aList[i].bActive := TRUE;
+aList[i].bAcked := FALSE;
+nChangeCounter := nChangeCounter + 1;
+IF TO_INT(eSeverity) >= TO_INT(E_AlarmSeverity.Stop) THEN
+    nStopCounter := nStopCounter + 1;
+END_IF
+Raise := TRUE;
+]]></ST>
+      </Implementation>
+    </Method>
+    <Method Name="Clear" Id="{59e74d32-2cdc-5629-b399-e4b229e8de83}">
+      <Declaration><![CDATA[METHOD Clear : BOOL
+VAR_INPUT
+    eCode : E_AlarmCode;
+    nSource : DINT;
+    bAnySource : BOOL;
+END_VAR
+VAR
+    i : INT;
+END_VAR
+]]></Declaration>
+      <Implementation>
+        <ST><![CDATA[FOR i := 1 TO nCount DO
+    IF aList[i].eCode = eCode AND (bAnySource OR aList[i].nSource = nSource) AND aList[i].bActive THEN
+        aList[i].bActive := FALSE;
+        Clear := TRUE;
+    END_IF
+END_FOR
+IF Clear THEN
+    nChangeCounter := nChangeCounter + 1;
+    Purge();
+END_IF
+]]></ST>
+      </Implementation>
+    </Method>
+    <Method Name="Set" Id="{b41d8de5-af4e-5ed2-a14b-19e4d77968f1}">
+      <Declaration><![CDATA[METHOD Set : BOOL
+// Alarm entsprechend einer Bedingung setzen oder zurücknehmen.
+VAR_INPUT
+    bCondition : BOOL;
+    eCode : E_AlarmCode;
+    eSeverity : E_AlarmSeverity;
+    nSource : DINT;
+    nDetail : UDINT;
+END_VAR
+]]></Declaration>
+      <Implementation>
+        <ST><![CDATA[IF bCondition THEN
+    Raise(eCode, eSeverity, nSource, nDetail);
+ELSIF IsActive(eCode, nSource, FALSE) THEN
+    Clear(eCode, nSource, FALSE);
+END_IF
+Set := bCondition;
+]]></ST>
+      </Implementation>
+    </Method>
+    <Method Name="Ack" Id="{d939f8d1-e55e-504e-aa90-d88ec32f7f33}">
+      <Declaration><![CDATA[METHOD Ack : BOOL
+VAR_INPUT
+    nSlot : DINT;     // 0 = alle
+END_VAR
+VAR
+    i : INT;
+END_VAR
+]]></Declaration>
+      <Implementation>
+        <ST><![CDATA[FOR i := 1 TO nCount DO
+    IF nSlot = 0 OR nSlot = i THEN
+        aList[i].bAcked := TRUE;
+    END_IF
+END_FOR
+nChangeCounter := nChangeCounter + 1;
+Purge();
+Ack := TRUE;
+]]></ST>
+      </Implementation>
+    </Method>
+    <Method Name="Purge" Id="{a7b498a4-39fd-5b88-9f80-b2a1c80506db}">
+      <Declaration><![CDATA[METHOD PRIVATE Purge
+VAR
+    i, j : INT;
+END_VAR
+]]></Declaration>
+      <Implementation>
+        <ST><![CDATA[j := 0;
+FOR i := 1 TO nCount DO
+    IF aList[i].bActive OR NOT aList[i].bAcked THEN
+        j := j + 1;
+        IF j <> i THEN
+            aList[j] := aList[i];
+        END_IF
+    END_IF
+END_FOR
+FOR i := j + 1 TO nCount DO
+    aList[i].eCode := E_AlarmCode.None;
+    aList[i].eSeverity := E_AlarmSeverity.None;
+    aList[i].nSource := 0;
+    aList[i].nDetail := 0;
+    aList[i].nTimestamp := 0;
+    aList[i].bActive := FALSE;
+    aList[i].bAcked := FALSE;
+END_FOR
+nCount := j;
+]]></ST>
+      </Implementation>
+    </Method>
+    <Method Name="IsActive" Id="{392ecb1e-ea75-5ecd-92bf-efe9f2b1cd4f}">
+      <Declaration><![CDATA[METHOD IsActive : BOOL
+VAR_INPUT
+    eCode : E_AlarmCode;
+    nSource : DINT;
+    bAnySource : BOOL;
+END_VAR
+VAR
+    i : INT;
+END_VAR
+]]></Declaration>
+      <Implementation>
+        <ST><![CDATA[FOR i := 1 TO nCount DO
+    IF aList[i].eCode = eCode AND aList[i].bActive AND (bAnySource OR aList[i].nSource = nSource) THEN
+        IsActive := TRUE;
+        RETURN;
+    END_IF
+END_FOR
+]]></ST>
+      </Implementation>
+    </Method>
+    <Method Name="FaultActive" Id="{dd1a3c95-2fd5-5d76-a67b-d516fbfcb7dd}">
+      <Declaration><![CDATA[METHOD FaultActive : BOOL
+// Aktiver Alarm der Stufe Fault.
+VAR
+    i : INT;
+END_VAR
+]]></Declaration>
+      <Implementation>
+        <ST><![CDATA[FOR i := 1 TO nCount DO
+    IF aList[i].bActive AND aList[i].eSeverity = E_AlarmSeverity.Fault THEN
+        FaultActive := TRUE;
+        RETURN;
+    END_IF
+END_FOR
+]]></ST>
+      </Implementation>
+    </Method>
+    <Method Name="WriteTo" Id="{09d8d372-15fc-5da6-95ea-12801cff45e1}">
+      <Declaration><![CDATA[METHOD WriteTo
+VAR_IN_OUT
+    stOut : ST_HmiAlarms;
+END_VAR
+VAR
+    i : INT;
+    nHigh : INT;
+END_VAR
+]]></Declaration>
+      <Implementation>
+        <ST><![CDATA[stOut.aEntry := aList;
+stOut.nCount := INT_TO_UINT(nCount);
+stOut.bOverflow := bOverflow;
+stOut.nChangeCounter := nChangeCounter;
+nHigh := 0;
+stOut.eHighestSeverity := E_AlarmSeverity.None;
+FOR i := 1 TO nCount DO
+    IF TO_INT(aList[i].eSeverity) > nHigh THEN
+        nHigh := TO_INT(aList[i].eSeverity);
+        stOut.eHighestSeverity := aList[i].eSeverity;
+    END_IF
+END_FOR
+]]></ST>
+      </Implementation>
+    </Method>
+  </POU>
+</TcPlcObject>

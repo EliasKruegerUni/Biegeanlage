@@ -1,0 +1,33 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<TcPlcObject Version="1.1.0.1">
+  <POU Name="FB_IoSim" Id="{96fdc4e0-4b98-5ca6-82d2-501cf3e70196}" SpecialFunc="None">
+    <Declaration><![CDATA[// Simulationsmodell der Peripherie (nur mit Compiler-Define SIM aktiv): Endlagen der Niederhalter folgen den Ventilen.
+FUNCTION_BLOCK FB_IoSim
+VAR_INPUT
+    abValve : ARRAY[1..6] OF BOOL;
+END_VAR
+VAR_OUTPUT
+    abClampOpen : ARRAY[1..6] OF BOOL;
+END_VAR
+VAR
+    aTonLeave : ARRAY[1..6] OF TON;   // Endlage OFFEN wird kurz nach dem Schalten verlassen
+    aTonOpen  : ARRAY[1..6] OF TON;   // Endlage OFFEN wird nach der Schaltzeit erreicht
+    i : INT;
+END_VAR
+]]></Declaration>
+    <Implementation>
+      <ST><![CDATA[FOR i := 1 TO 6 DO
+    aTonLeave[i](IN := abValve[i], PT := T#20MS);
+    aTonOpen[i](IN := NOT abValve[i], PT := GVL_Config.tClampSwitchSim);
+    IF GVL_Sim.abClampStuck[i] THEN
+        abClampOpen[i] := TRUE;
+    ELSIF aTonLeave[i].Q THEN
+        abClampOpen[i] := FALSE;
+    ELSIF aTonOpen[i].Q THEN
+        abClampOpen[i] := TRUE;
+    END_IF
+END_FOR
+]]></ST>
+    </Implementation>
+  </POU>
+</TcPlcObject>

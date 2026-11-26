@@ -1,0 +1,15 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<TcPlcObject Version="1.1.0.1">
+  <POU Name="F_Z1Max" Id="{53b0a940-1f15-594a-87fe-156330e62e2c}" SpecialFunc="None">
+    <Declaration><![CDATA[// Größte zulässige Z1-Position (Futter <-> Führung) bei gegebener Z2-Position.
+FUNCTION F_Z1Max : LREAL
+VAR_INPUT
+    fZ2 : LREAL;
+END_VAR
+]]></Declaration>
+    <Implementation>
+      <ST><![CDATA[F_Z1Max := GVL_Config.fZ1CollisionBase_mm + fZ2;
+]]></ST>
+    </Implementation>
+  </POU>
+</TcPlcObject>

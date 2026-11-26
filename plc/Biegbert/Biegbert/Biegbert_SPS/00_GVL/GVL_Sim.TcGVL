@@ -1,0 +1,15 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<TcPlcObject Version="1.1.0.1">
+  <GVL Name="GVL_Sim" Id="{c8cdde01-4ae9-5fc2-bfcc-54d426b3fafe}">
+    <Declaration><![CDATA[// Eingriffe der Simulation. Wirkt nur, wenn das Projekt mit dem Compiler-Define SIM übersetzt wurde.
+// Gesetzt über die Kommandos SimSetInput und SimInjectFault.
+{attribute 'qualified_only'}
+VAR_GLOBAL
+    bPressureOk  : BOOL := TRUE;
+    bEStop       : BOOL;
+    abAxisFault  : ARRAY[1..5] OF BOOL;   // simulierter Achsfehler, Index = E_Axis
+    abClampStuck : ARRAY[1..6] OF BOOL;   // Endlage OFFEN bleibt hängen
+END_VAR
+]]></Declaration>
+  </GVL>
+</TcPlcObject>

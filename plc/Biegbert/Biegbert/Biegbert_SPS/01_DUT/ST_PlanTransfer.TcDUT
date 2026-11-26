@@ -1,0 +1,15 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<TcPlcObject Version="1.1.0.1">
+  <DUT Name="ST_PlanTransfer" Id="{da0242ee-1ce6-5fbf-9f98-bc6ff1a67fa2}">
+    <Declaration><![CDATA[// Übergabebereich Biegeplan (GVL_HMI.stPlanXfer) und aktiver Plan (GVL_Plan.stActive). 103552 Byte.
+{attribute 'pack_mode' := '1'}
+TYPE ST_PlanTransfer :
+STRUCT
+    stHeader : ST_PlanHeader;
+    aSection : ARRAY[1..16] OF ST_PlanSection;    // = GVL_Config.cMaxSections
+    aPoint : ARRAY[1..4000] OF ST_PlanPoint;      // = GVL_Config.cMaxPoints
+END_STRUCT
+END_TYPE
+]]></Declaration>
+  </DUT>
+</TcPlcObject>

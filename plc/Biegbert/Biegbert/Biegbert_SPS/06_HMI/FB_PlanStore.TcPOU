@@ -1,0 +1,139 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<TcPlcObject Version="1.1.0.1">
+  <POU Name="FB_PlanStore" Id="{2ef5b429-91a5-58e9-9aa5-21f5b3894bcf}" SpecialFunc="None">
+    <Declaration><![CDATA[// Prüft den Plan im Übergabebereich GVL_HMI.stPlanXfer und übernimmt ihn als aktiven Plan nach GVL_Plan.stActive.
+// Rückgabe von Load(): 0 = in Ordnung, sonst Detailcode (backend/biegbert/alarms.py):
+//   1 Plan-ID passt nicht, 2 Format/Anzahl/Feld ungültig, 3 Prüfsumme falsch,
+//  10 z1_start >= z1_fin, 11 s nicht steigend oder Abschnitte überlappen, 12 u oder phi außerhalb X/A,
+//  13 Z2 außerhalb, 14 Ende hinter Kollisionsgrenze, 15 zu viele Punkte, 16 X zu schnell für den Vorschub
+FUNCTION_BLOCK FB_PlanStore
+VAR
+    nLastDetail : UDINT;
+END_VAR
+]]></Declaration>
+    <Implementation>
+      <ST><![CDATA[;
+]]></ST>
+    </Implementation>
+    <Method Name="Load" Id="{07480b36-3841-5585-8249-328ae3daded7}">
+      <Declaration><![CDATA[METHOD Load : UDINT
+VAR_INPUT
+    nPlanId : UDINT;
+END_VAR
+VAR
+    nSec, nPts, nSc, k, j : INT;
+    nFirst, nCnt : INT;
+    fPrevFin, fPrevS, fSlope, fFeed, fDs : LREAL;
+    nFeedIdx : INT;
+END_VAR
+]]></Declaration>
+      <Implementation>
+        <ST><![CDATA[Load := 0;
+IF nPlanId = 0 OR GVL_HMI.stPlanXfer.stHeader.nPlanId <> nPlanId THEN
+    Load := 1; RETURN;
+END_IF
+IF GVL_HMI.stPlanXfer.stHeader.nFormat <> GVL_Config.cPlanFormat THEN
+    Load := 2; RETURN;
+END_IF
+nSec := UINT_TO_INT(GVL_HMI.stPlanXfer.stHeader.nSectionCount);
+IF GVL_HMI.stPlanXfer.stHeader.nPointCount > INT_TO_UDINT(GVL_Config.cMaxPoints) THEN
+    Load := 15; RETURN;
+END_IF
+nPts := UDINT_TO_INT(GVL_HMI.stPlanXfer.stHeader.nPointCount);
+IF nSec < 1 OR nSec > GVL_Config.cMaxSections OR nPts < 2 THEN
+    Load := 2; RETURN;
+END_IF
+IF F_PlanChecksum(GVL_HMI.stPlanXfer) <> UDINT_TO_DWORD(GVL_HMI.stPlanXfer.stHeader.nChecksum) THEN
+    Load := 3; RETURN;
+END_IF
+
+fPrevFin := -1.0E9;
+FOR nSc := 1 TO nSec DO
+    nFirst := UDINT_TO_INT(GVL_HMI.stPlanXfer.aSection[nSc].nFirstPoint);
+    nCnt := UDINT_TO_INT(GVL_HMI.stPlanXfer.aSection[nSc].nPointCount);
+    IF NOT (GVL_HMI.stPlanXfer.aSection[nSc].fZ1Start_mm < GVL_HMI.stPlanXfer.aSection[nSc].fZ1Fin_mm) THEN
+        Load := 10; RETURN;
+    END_IF
+    IF nCnt < 2 OR nFirst < 1 OR nFirst + nCnt - 1 > nPts THEN
+        Load := 2; RETURN;
+    END_IF
+    IF GVL_HMI.stPlanXfer.aSection[nSc].fZ1Start_mm < fPrevFin - GVL_Config.fPosTol THEN
+        Load := 11; RETURN;
+    END_IF
+    IF GVL_HMI.stPlanXfer.aSection[nSc].fZ2_mm < GVL_Config.aAxisMin[2] OR GVL_HMI.stPlanXfer.aSection[nSc].fZ2_mm > GVL_Config.aAxisMax[2] THEN
+        Load := 13; RETURN;
+    END_IF
+    IF GVL_HMI.stPlanXfer.aSection[nSc].fZ1Fin_mm > F_Z1Max(GVL_HMI.stPlanXfer.aSection[nSc].fZ2_mm) + GVL_Config.fPosTol
+       OR GVL_HMI.stPlanXfer.aSection[nSc].fZ1Fin_mm > GVL_Config.aAxisMax[1] THEN
+        Load := 14; RETURN;
+    END_IF
+    // Vorschubprofil
+    IF GVL_HMI.stPlanXfer.aSection[nSc].nFeedCount < 1 OR UINT_TO_INT(GVL_HMI.stPlanXfer.aSection[nSc].nFeedCount) > GVL_Config.cMaxFeed THEN
+        Load := 2; RETURN;
+    END_IF
+    FOR k := 1 TO UINT_TO_INT(GVL_HMI.stPlanXfer.aSection[nSc].nFeedCount) DO
+        IF GVL_HMI.stPlanXfer.aSection[nSc].aFeed[k].fFeed_mm_s <= 0.0 OR GVL_HMI.stPlanXfer.aSection[nSc].aFeed[k].fFeed_mm_s > GVL_Config.aAxisVMax[1] THEN
+            Load := 2; RETURN;
+        END_IF
+        IF k > 1 AND_THEN GVL_HMI.stPlanXfer.aSection[nSc].aFeed[k].fZ1_mm <= GVL_HMI.stPlanXfer.aSection[nSc].aFeed[k - 1].fZ1_mm THEN
+            Load := 2; RETURN;
+        END_IF
+    END_FOR
+    // Rotationen
+    IF UINT_TO_INT(GVL_HMI.stPlanXfer.aSection[nSc].nRotCount) > GVL_Config.cMaxRot THEN
+        Load := 2; RETURN;
+    END_IF
+    FOR k := 1 TO UINT_TO_INT(GVL_HMI.stPlanXfer.aSection[nSc].nRotCount) DO
+        IF GVL_HMI.stPlanXfer.aSection[nSc].aRot[k].fZ1_mm < GVL_HMI.stPlanXfer.aSection[nSc].fZ1Start_mm - GVL_Config.fPosTol
+           OR GVL_HMI.stPlanXfer.aSection[nSc].aRot[k].fZ1_mm > GVL_HMI.stPlanXfer.aSection[nSc].fZ1Fin_mm + GVL_Config.fPosTol
+           OR (k > 1 AND_THEN GVL_HMI.stPlanXfer.aSection[nSc].aRot[k].fZ1_mm < GVL_HMI.stPlanXfer.aSection[nSc].aRot[k - 1].fZ1_mm) THEN
+            Load := 2; RETURN;
+        END_IF
+    END_FOR
+    // Stützpunkte
+    IF ABS(GVL_HMI.stPlanXfer.aPoint[nFirst].fS_mm - GVL_HMI.stPlanXfer.aSection[nSc].fZ1Start_mm) > GVL_Config.fPosTol
+       OR ABS(GVL_HMI.stPlanXfer.aPoint[nFirst + nCnt - 1].fS_mm - GVL_HMI.stPlanXfer.aSection[nSc].fZ1Fin_mm) > GVL_Config.fPosTol THEN
+        Load := 11; RETURN;
+    END_IF
+    nFeedIdx := 1;
+    FOR j := nFirst TO nFirst + nCnt - 1 DO
+        IF ABS(GVL_HMI.stPlanXfer.aPoint[j].fU_mm) > GVL_Config.aAxisMax[3] OR ABS(GVL_HMI.stPlanXfer.aPoint[j].fPhi_deg) > GVL_Config.aAxisMax[4] THEN
+            Load := 12; RETURN;
+        END_IF
+        IF j > nFirst THEN
+            fDs := GVL_HMI.stPlanXfer.aPoint[j].fS_mm - GVL_HMI.stPlanXfer.aPoint[j - 1].fS_mm;
+            IF fDs <= 0.0 THEN
+                Load := 11; RETURN;
+            END_IF
+            WHILE nFeedIdx < UINT_TO_INT(GVL_HMI.stPlanXfer.aSection[nSc].nFeedCount)
+                  AND_THEN GVL_HMI.stPlanXfer.aSection[nSc].aFeed[nFeedIdx + 1].fZ1_mm <= GVL_HMI.stPlanXfer.aPoint[j - 1].fS_mm + 1.0E-6 DO
+                nFeedIdx := nFeedIdx + 1;
+            END_WHILE
+            fFeed := GVL_HMI.stPlanXfer.aSection[nSc].aFeed[nFeedIdx].fFeed_mm_s;
+            fSlope := ABS(GVL_HMI.stPlanXfer.aPoint[j].fU_mm - GVL_HMI.stPlanXfer.aPoint[j - 1].fU_mm) / fDs;
+            IF fSlope * fFeed > GVL_Config.aAxisVMax[3] * 1.05 THEN
+                Load := 16; RETURN;
+            END_IF
+        END_IF
+    END_FOR
+    fPrevFin := GVL_HMI.stPlanXfer.aSection[nSc].fZ1Fin_mm;
+END_FOR
+
+MEMCPY(destAddr := ADR(GVL_Plan.stActive), srcAddr := ADR(GVL_HMI.stPlanXfer), n := SIZEOF(ST_PlanTransfer));
+GVL_Plan.bValid := TRUE;
+]]></ST>
+      </Implementation>
+    </Method>
+    <Method Name="Invalidate" Id="{56e4c130-275e-5d07-9318-4a4f19129778}">
+      <Declaration><![CDATA[METHOD Invalidate
+VAR_INPUT
+END_VAR
+]]></Declaration>
+      <Implementation>
+        <ST><![CDATA[GVL_Plan.bValid := FALSE;
+GVL_Plan.stActive.stHeader.nPlanId := 0;
+]]></ST>
+      </Implementation>
+    </Method>
+  </POU>
+</TcPlcObject>

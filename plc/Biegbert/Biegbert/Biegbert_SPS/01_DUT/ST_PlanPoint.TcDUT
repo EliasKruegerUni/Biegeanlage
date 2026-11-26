@@ -1,0 +1,15 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<TcPlcObject Version="1.1.0.1">
+  <DUT Name="ST_PlanPoint" Id="{9dcaf09b-4d9a-5a73-b671-38799903e83f}">
+    <Declaration><![CDATA[// Stützpunkt der Kurvenscheibe: Masterposition s (= Z1) mit u (= X) und phi (= A).
+{attribute 'pack_mode' := '1'}
+TYPE ST_PlanPoint :
+STRUCT
+    fS_mm : LREAL;
+    fU_mm : LREAL;
+    fPhi_deg : LREAL;
+END_STRUCT
+END_TYPE
+]]></Declaration>
+  </DUT>
+</TcPlcObject>

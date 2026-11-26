@@ -1,0 +1,23 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<TcPlcObject Version="1.1.0.1">
+  <DUT Name="ST_PlanSection" Id="{747dc42c-40aa-5056-930b-7e93c65f82f1}">
+    <Declaration><![CDATA[// Ein Abschnitt = eine Kurvenscheibe mit konstantem Z2. Geraden sind Teil der Kurvenscheibe (u = 0).
+{attribute 'pack_mode' := '1'}
+TYPE ST_PlanSection :
+STRUCT
+    fZ1Start_mm : LREAL;
+    fZ1Fin_mm : LREAL;
+    fZ2_mm : LREAL;
+    nFirstPoint : UDINT;      // Index in aPoint (1-basiert)
+    nPointCount : UDINT;
+    nFeedCount : UINT;
+    aFeed : ARRAY[1..8] OF ST_FeedPoint;     // = GVL_Config.cMaxFeed
+    nRotCount : UINT;
+    aRot : ARRAY[1..16] OF ST_RotPoint;      // = GVL_Config.cMaxRot
+    nClampMask : BYTE;        // Bit 0..5: NH1..NH6 zu Beginn schließen
+    aClampOpen_mm : ARRAY[1..6] OF LREAL;    // Z1-Position, ab der NH i geöffnet wird
+END_STRUCT
+END_TYPE
+]]></Declaration>
+  </DUT>
+</TcPlcObject>

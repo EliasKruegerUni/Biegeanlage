@@ -1,0 +1,413 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<TcPlcObject Version="1.1.0.1">
+  <POU Name="FB_BendSequence" Id="{a4cc9541-5710-5478-bfc2-841c2a910559}" SpecialFunc="None">
+    <Declaration><![CDATA[// GRAFCET G2 (Biegevorgang, Schritte 20..28) und G3 (Werkstückrotation, 30..32) nach [Langfeld].
+// Abweichungen (begründet in docs/grafcet-zuordnung.md):
+//  - S21 fährt zusätzlich Z2, X und A an; die Kurvenscheibe des Abschnitts wird in S21 geladen.
+//  - Rückbiegen liegt in der Kurvenscheibe (Prüfbericht H4); Geraden zwischen Bögen ohne Halt.
+//  - S27 erlaubt nach dem letzten Abschnitt neben ENT auch die Fortsetzung am selben Rohr (Schrittbetrieb).
+// Bewegungen nur bei FREI (Automatik). In der Pause hält der Master (Hold) bzw. halten die Einzelbewegungen;
+// beim Wiederanlauf setzen die Schritte ihre Bewegungen fort.
+FUNCTION_BLOCK FB_BendSequence
+VAR_INPUT
+    bFree : BOOL;
+    bAbort : BOOL;          // Impuls: Wechsel in Einzelachsen -> Ablauf abbrechen
+    bInit : BOOL;           // Impuls: G1 Schritt 13 -> G2 := 20, G3 := 30
+END_VAR
+VAR_OUTPUT
+    eStepG2 : E_G2Step := E_G2Step.S20_Grundzustand;
+    eStepG3 : E_G3Step := E_G3Step.S30_Bereit;
+    nSection : INT;
+    bMaterialOk : BOOL;
+    bTubeInMachine : BOOL;  // nach dem ersten Start bis ENT
+    bWaitingAtEnd : BOOL;   // S27 nach dem letzten Abschnitt: wartet auf ENT oder Fortsetzung
+END_VAR
+VAR
+    ipKin : I_Kinematics;
+    eLastG2 : E_G2Step := E_G2Step.S20_Grundzustand;
+    bEntry : BOOL;
+    bFreeLast : BOOL;
+    bQ1, bQ2, bEnt, bContinue : BOOL;
+    fWTarget : LREAL;
+    tonStep : TON;
+    tStepLimit : TIME;
+    bOk : BOOL;
+    bEndReached : BOOL;
+    stKin : ST_KinStatus;
+    bAbortReq : BOOL;
+    i : INT;
+END_VAR
+]]></Declaration>
+    <Implementation>
+      <ST><![CDATA[ipKin := GVL_Devices.fbKin;
+
+// ── Abbruch / Initialisierung ──
+IF bAbort OR bInit OR bAbortReq THEN
+    bAbortReq := FALSE;
+    ipKin.Abort();
+    FOR i := 1 TO 5 DO
+        IF GVL_Devices.aAxis[i].bBusy AND NOT GVL_Devices.aAxis[i].bLockedByKin THEN
+            GVL_Devices.aAxis[i].Halt();
+        END_IF
+    END_FOR
+    eStepG2 := E_G2Step.S20_Grundzustand;
+    eStepG3 := E_G3Step.S30_Bereit;
+    nSection := 0;
+    bQ1 := FALSE; bQ2 := FALSE; bEnt := FALSE; bContinue := FALSE;
+    IF bInit THEN
+        bTubeInMachine := FALSE;
+    END_IF
+END_IF
+
+// Not-Halt während des Ablaufs: Pneumatik ist entlüftet, die Klemmung nicht mehr gesichert -> Ablauf abbrechen.
+// Neustart nur aus der Grundstellung (Prüfbericht: Klemmprüfung nach Not-Halt-Wiederanlauf).
+IF GVL_IO.bEStopActive AND eStepG2 <> E_G2Step.S20_Grundzustand AND eStepG2 <> E_G2Step.S27_Uebergabe THEN
+    ipKin.Abort();
+    eStepG2 := E_G2Step.S20_Grundzustand;
+    eStepG3 := E_G3Step.S30_Bereit;
+    nSection := 0;
+END_IF
+
+// ── Pause und Wiederanlauf ──
+IF bFreeLast AND NOT bFree THEN
+    ipKin.Hold();
+    FOR i := 1 TO 5 DO
+        IF GVL_Devices.aAxis[i].bBusy AND NOT GVL_Devices.aAxis[i].bLockedByKin THEN
+            GVL_Devices.aAxis[i].Halt();
+        END_IF
+    END_FOR
+ELSIF bFree AND NOT bFreeLast THEN
+    IF eStepG2 = E_G2Step.S23_Biegen AND eStepG3 = E_G3Step.S30_Bereit THEN
+        ipKin.Resume();
+    END_IF
+END_IF
+bFreeLast := bFree;
+
+bEntry := eStepG2 <> eLastG2;
+eLastG2 := eStepG2;
+
+// ── Zeitüberwachung der Bewegungsschritte ──
+CASE eStepG2 OF
+E_G2Step.S21_Startposition, E_G2Step.S26_Neutral, E_G2Step.S28_Grundstellung:
+    tStepLimit := T#120S;
+E_G2Step.S22_Niederhalter:
+    tStepLimit := T#10S;
+ELSE
+    tStepLimit := T#0S;
+END_CASE
+tonStep(IN := bFree AND NOT bEntry AND tStepLimit > T#0S, PT := tStepLimit);
+IF tonStep.Q THEN
+    GVL_Devices.fbAlarm.Raise(E_AlarmCode.SeqStepTimeout, E_AlarmSeverity.Stop, 0, INT_TO_UDINT(TO_INT(eStepG2)));
+    tonStep(IN := FALSE);
+END_IF
+
+bWaitingAtEnd := FALSE;
+
+// ── G2 ──
+CASE eStepG2 OF
+E_G2Step.S20_Grundzustand:
+    nSection := 0;
+
+E_G2Step.S21_Startposition:
+    IF bEntry THEN
+        ipKin.LoadSection(nSection);
+    END_IF
+    IF bFree THEN
+        bOk := MoveTo(2, GVL_Plan.stActive.aSection[nSection].fZ2_mm);
+        bOk := MoveTo(3, 0.0) AND bOk;
+        bOk := MoveTo(4, 0.0) AND bOk;
+        IF bOk THEN   // Z1 erst, wenn Z2 steht (Kollisionsgrenze hängt von Z2 ab)
+            IF MoveTo(1, GVL_Plan.stActive.aSection[nSection].fZ1Start_mm) AND ipKin.TableReady() THEN
+                eStepG2 := E_G2Step.S22_Niederhalter;
+            END_IF
+        END_IF
+    END_IF
+
+E_G2Step.S22_Niederhalter:
+    IF bEntry THEN
+        FOR i := 1 TO 6 DO
+            IF (GVL_Plan.stActive.aSection[nSection].nClampMask AND SHL(BYTE#1, i - 1)) <> 0
+               AND NOT F_ChuckInZone((i + 1) / 2, GVL_Axis.Z1.NcToPlc.ActPos) THEN
+                GVL_Devices.aClamp[i].Close();
+            END_IF
+        END_FOR
+    END_IF
+    bOk := TRUE;
+    FOR i := 1 TO 6 DO
+        IF GVL_Devices.aClamp[i].IsCommandedClosed() AND NOT GVL_Devices.aClamp[i].IsClamped() THEN
+            bOk := FALSE;
+        END_IF
+    END_FOR
+    IF bOk AND bFree THEN
+        eStepG2 := E_G2Step.S23_Biegen;
+    END_IF
+
+E_G2Step.S23_Biegen:
+    IF bEntry THEN
+        ipKin.Start();
+    END_IF
+    // Niederhalter positionsabhängig öffnen (↑[p_Z1 >= z_NH,i])
+    FOR i := 1 TO 6 DO
+        IF GVL_Devices.aClamp[i].IsCommandedClosed()
+           AND GVL_Axis.Z1.NcToPlc.ActPos >= GVL_Plan.stActive.aSection[nSection].aClampOpen_mm[i] THEN
+            GVL_Devices.aClamp[i].Open();
+        END_IF
+    END_FOR
+    IF ipKin.SectionDone() THEN
+        eStepG2 := E_G2Step.S24_Halten;
+    END_IF
+
+E_G2Step.S24_Halten:
+    IF bEntry THEN
+        bQ1 := FALSE;
+    END_IF
+    IF bQ1 THEN
+        bQ1 := FALSE;
+        eStepG2 := E_G2Step.S25_NhOeffnen;
+    END_IF
+
+E_G2Step.S25_NhOeffnen:
+    IF bEntry THEN
+        bQ2 := FALSE;
+        FOR i := 1 TO 6 DO
+            GVL_Devices.aClamp[i].Open();
+        END_FOR
+    END_IF
+    IF bQ2 AND AllClampsOpen() THEN
+        bQ2 := FALSE;
+        eStepG2 := E_G2Step.S26_Neutral;
+    END_IF
+
+E_G2Step.S26_Neutral:
+    IF bEntry THEN
+        ipKin.Abort();
+    END_IF
+    IF bFree AND NOT ipKin.IsCoupled() THEN
+        bOk := MoveTo(3, 0.0);
+        bOk := MoveTo(4, 0.0) AND bOk;
+        IF bOk THEN
+            eStepG2 := E_G2Step.S27_Uebergabe;
+        END_IF
+    END_IF
+
+E_G2Step.S27_Uebergabe:
+    IF bEntry THEN
+        nSection := nSection + 1;
+        bEnt := FALSE;
+        bContinue := FALSE;
+        stKin := ipKin.GetStatus();
+        bEndReached := NOT GVL_Plan.bValid OR GVL_Plan.stActive.stHeader.nPlanId <> stKin.nPlanId
+                       OR nSection > UINT_TO_INT(GVL_Plan.stActive.stHeader.nSectionCount);
+    END_IF
+    IF NOT bEndReached THEN
+        IF bFree THEN
+            eStepG2 := E_G2Step.S21_Startposition;
+        END_IF
+    ELSE
+        bWaitingAtEnd := TRUE;
+        IF bEnt THEN
+            bEnt := FALSE;
+            bMaterialOk := FALSE;
+            eStepG2 := E_G2Step.S28_Grundstellung;
+        ELSIF bContinue THEN
+            bContinue := FALSE;
+            nSection := 1;
+            eStepG2 := E_G2Step.S21_Startposition;
+        END_IF
+    END_IF
+
+E_G2Step.S28_Grundstellung:
+    IF bEntry THEN
+        fWTarget := GVL_Devices.aAxis[5].fActPos - F_Mod360(GVL_Devices.aAxis[5].fActPos);
+        IF F_Mod360(GVL_Devices.aAxis[5].fActPos) > 180.0 THEN
+            fWTarget := fWTarget + 360.0;
+        END_IF
+    END_IF
+    IF bFree THEN
+        bOk := MoveTo(2, 0.0);
+        bOk := MoveTo(3, 0.0) AND bOk;
+        bOk := MoveTo(4, 0.0) AND bOk;
+        bOk := MoveTo(5, fWTarget) AND bOk;
+        bOk := MoveTo(1, 0.0) AND bOk;
+        IF bOk THEN
+            bTubeInMachine := FALSE;
+            eStepG2 := E_G2Step.S20_Grundzustand;
+        END_IF
+    END_IF
+END_CASE
+
+// ── G3 ──
+CASE eStepG3 OF
+E_G3Step.S30_Bereit:
+    IF eStepG2 = E_G2Step.S23_Biegen AND ipKin.AtRotation() THEN
+        eStepG3 := E_G3Step.S31_Stop;
+    END_IF
+
+E_G3Step.S31_Stop:
+    IF ABS(GVL_Axis.Z1.NcToPlc.ActVelo) < 0.001 THEN
+        fWTarget := GVL_Devices.aAxis[5].fActPos + ipKin.RotationAngle();
+        eStepG3 := E_G3Step.S32_Drehen;
+    END_IF
+
+E_G3Step.S32_Drehen:
+    IF bFree AND MoveTo(5, fWTarget) THEN
+        IF ipKin.ContinueAfterRotation() THEN
+            eStepG3 := E_G3Step.S30_Bereit;
+        END_IF
+    END_IF
+END_CASE
+]]></ST>
+    </Implementation>
+    <Method Name="MoveTo" Id="{d243ad47-a7a5-5e3e-8d94-a84e2ff2f95e}">
+      <Declaration><![CDATA[METHOD PRIVATE MoveTo : BOOL
+// Fährt Achse nIdx im Eilgang auf fPos, falls sie nicht dort steht. TRUE = angekommen.
+VAR_INPUT
+    nIdx : INT;
+    fPos : LREAL;
+END_VAR
+]]></Declaration>
+      <Implementation>
+        <ST><![CDATA[IF GVL_Devices.aAxis[nIdx].AtPosition(fPos) THEN
+    MoveTo := TRUE;
+ELSIF NOT GVL_Devices.aAxis[nIdx].bBusy AND GVL_Devices.aAxis[nIdx].bReady THEN
+    GVL_Devices.aAxis[nIdx].MoveAbs(fPos, GVL_Config.aAxisVSetup[nIdx]);
+END_IF
+]]></ST>
+      </Implementation>
+    </Method>
+    <Method Name="AllClampsOpen" Id="{41acdf32-e51d-508c-a827-7a21d7c59b91}">
+      <Declaration><![CDATA[METHOD PRIVATE AllClampsOpen : BOOL
+VAR
+    k : INT;
+END_VAR
+]]></Declaration>
+      <Implementation>
+        <ST><![CDATA[AllClampsOpen := TRUE;
+FOR k := 1 TO 6 DO
+    IF NOT GVL_Devices.aClamp[k].IsOpen() THEN
+        AllClampsOpen := FALSE;
+    END_IF
+END_FOR
+]]></ST>
+      </Implementation>
+    </Method>
+    <Method Name="Start" Id="{ad225e33-d443-5bf1-9493-da6c506fdd82}">
+      <Declaration><![CDATA[METHOD Start : E_CmdResult
+// SeqStart. Betriebsart, Plan, Material, Not-Halt, HMI und Achsen prüft FB_HmiCommand vorher.
+// Aus S20 nur in Grundstellung; aus S27 (letzter Abschnitt fertig) als Fortsetzung am selben Rohr.
+VAR_INPUT
+    dwBaseMissing : DWORD;
+END_VAR
+VAR_OUTPUT
+    nDetail : UDINT;
+END_VAR
+]]></Declaration>
+      <Implementation>
+        <ST><![CDATA[IF eStepG2 = E_G2Step.S20_Grundzustand THEN
+    IF (dwBaseMissing AND 16#3F) <> 0 THEN
+        nDetail := DWORD_TO_UDINT(dwBaseMissing AND 16#3F);
+        Start := E_CmdResult.RejectedInterlock;
+        RETURN;
+    END_IF
+    nSection := 1;
+    bTubeInMachine := TRUE;
+    eStepG2 := E_G2Step.S21_Startposition;
+    Start := E_CmdResult.Accepted;
+ELSIF eStepG2 = E_G2Step.S27_Uebergabe AND bWaitingAtEnd THEN
+    IF GVL_Devices.aAxis[1].fActPos > GVL_Plan.stActive.aSection[1].fZ1Start_mm + GVL_Config.fPosTol THEN
+        nDetail := 16#20000;
+        Start := E_CmdResult.RejectedInterlock;
+        RETURN;
+    END_IF
+    IF (dwBaseMissing AND 16#2C) <> 0 THEN   // X, A nicht auf 0 oder Niederhalter nicht offen
+        nDetail := DWORD_TO_UDINT(dwBaseMissing AND 16#2C);
+        Start := E_CmdResult.RejectedInterlock;
+        RETURN;
+    END_IF
+    bContinue := TRUE;
+    Start := E_CmdResult.Accepted;
+ELSE
+    Start := E_CmdResult.RejectedSequence;
+END_IF
+]]></ST>
+      </Implementation>
+    </Method>
+    <Method Name="ConfirmQ1" Id="{a423d631-8381-58ab-b766-d7d097165ceb}">
+      <Declaration><![CDATA[METHOD ConfirmQ1 : E_CmdResult
+VAR_INPUT
+END_VAR
+]]></Declaration>
+      <Implementation>
+        <ST><![CDATA[IF eStepG2 = E_G2Step.S24_Halten THEN
+    bQ1 := TRUE;
+    ConfirmQ1 := E_CmdResult.Accepted;
+ELSE
+    ConfirmQ1 := E_CmdResult.RejectedSequence;
+END_IF
+]]></ST>
+      </Implementation>
+    </Method>
+    <Method Name="ConfirmQ2" Id="{bd73f34b-f69f-5168-9f43-b78a9e990082}">
+      <Declaration><![CDATA[METHOD ConfirmQ2 : E_CmdResult
+VAR_INPUT
+END_VAR
+]]></Declaration>
+      <Implementation>
+        <ST><![CDATA[IF eStepG2 = E_G2Step.S25_NhOeffnen THEN
+    bQ2 := TRUE;
+    ConfirmQ2 := E_CmdResult.Accepted;
+ELSE
+    ConfirmQ2 := E_CmdResult.RejectedSequence;
+END_IF
+]]></ST>
+      </Implementation>
+    </Method>
+    <Method Name="PartRemoved" Id="{1b9df14b-27ed-53d8-bf94-d3b22f9ff1cc}">
+      <Declaration><![CDATA[METHOD PartRemoved : E_CmdResult
+VAR_INPUT
+END_VAR
+]]></Declaration>
+      <Implementation>
+        <ST><![CDATA[IF eStepG2 = E_G2Step.S27_Uebergabe AND bWaitingAtEnd THEN
+    bEnt := TRUE;
+    PartRemoved := E_CmdResult.Accepted;
+ELSE
+    PartRemoved := E_CmdResult.RejectedSequence;
+END_IF
+]]></ST>
+      </Implementation>
+    </Method>
+    <Method Name="CanLoadPlan" Id="{b50f281e-2f3d-5aff-85be-cae6a10ffcfd}">
+      <Declaration><![CDATA[METHOD CanLoadPlan : BOOL
+VAR_INPUT
+END_VAR
+]]></Declaration>
+      <Implementation>
+        <ST><![CDATA[CanLoadPlan := eStepG2 = E_G2Step.S20_Grundzustand OR (eStepG2 = E_G2Step.S27_Uebergabe AND bWaitingAtEnd);
+]]></ST>
+      </Implementation>
+    </Method>
+    <Method Name="SetMaterial" Id="{2083977d-e1d2-537c-a9d4-9df41cb94705}">
+      <Declaration><![CDATA[METHOD SetMaterial
+VAR_INPUT
+    bOk : BOOL;
+END_VAR
+]]></Declaration>
+      <Implementation>
+        <ST><![CDATA[bMaterialOk := bOk;
+]]></ST>
+      </Implementation>
+    </Method>
+    <Method Name="AbortRun" Id="{f97feba1-007d-5950-876e-6cb8de60e539}">
+      <Declaration><![CDATA[METHOD AbortRun
+// Ablauf abbrechen (z. B. nach quittiertem Kinematikfehler). Plan bleibt geladen.
+VAR_INPUT
+END_VAR
+]]></Declaration>
+      <Implementation>
+        <ST><![CDATA[bAbortReq := TRUE;
+]]></ST>
+      </Implementation>
+    </Method>
+  </POU>
+</TcPlcObject>

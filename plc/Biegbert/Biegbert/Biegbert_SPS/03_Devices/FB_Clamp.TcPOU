@@ -1,0 +1,159 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<TcPlcObject Version="1.1.0.1">
+  <POU Name="FB_Clamp" Id="{936507bc-9160-5df3-aa91-1edf155c1c67}" SpecialFunc="None">
+    <Declaration><![CDATA[// Ein Niederhalter (DFM-50, monostabiles 5/2-Ventil, Grundstellung OFFEN, Sensor nur auf Endlage OFFEN).
+// „Geklemmt“ = Endlage OFFEN verlassen, Druck in Ordnung und Schaltzeit abgelaufen [Langfeld].
+FUNCTION_BLOCK FB_Clamp
+VAR_INPUT
+    bSensorOpen : BOOL;
+    bPressureOk : BOOL;
+    bForceOpen : BOOL;      // Not-Halt: Ventil aus (Pneumatik wird ohnehin entlüftet)
+END_VAR
+VAR_OUTPUT
+    bValve : BOOL;
+    eState : E_ClampState := E_ClampState.Unknown;
+    bTimeoutFault : BOOL;
+    bPressureFault : BOOL;
+    fLastSwitchTime_ms : LREAL;
+END_VAR
+VAR
+    bCmdClose : BOOL;
+    tonSwitch : TON;
+    tonTimeout : TON;
+    tStart : TIME;
+END_VAR
+]]></Declaration>
+    <Implementation>
+      <ST><![CDATA[IF bForceOpen THEN
+    bCmdClose := FALSE;
+END_IF
+bValve := bCmdClose;
+tonSwitch(IN := bCmdClose, PT := GVL_Config.tClampSwitch);
+tonTimeout(IN := (eState = E_ClampState.Closing) OR (eState = E_ClampState.Opening), PT := GVL_Config.tClampTimeout);
+
+CASE eState OF
+E_ClampState.Unknown:
+    IF bCmdClose THEN
+        eState := E_ClampState.Closing;
+    ELSIF bSensorOpen THEN
+        eState := E_ClampState.Open;
+    ELSE
+        eState := E_ClampState.Opening;
+    END_IF
+
+E_ClampState.Open:
+    IF bCmdClose THEN
+        eState := E_ClampState.Closing;
+        tStart := TIME();
+    ELSIF NOT bSensorOpen THEN
+        eState := E_ClampState.Opening;     // Endlage verloren: neu überwachen
+    END_IF
+
+E_ClampState.Closing:
+    IF NOT bCmdClose THEN
+        eState := E_ClampState.Opening;
+        tStart := TIME();
+    ELSIF tonSwitch.Q AND NOT bSensorOpen AND bPressureOk THEN
+        eState := E_ClampState.Clamped;
+        fLastSwitchTime_ms := TIME_TO_LREAL(TIME() - tStart);
+    ELSIF tonTimeout.Q THEN
+        eState := E_ClampState.Fault;
+        bTimeoutFault := TRUE;
+    END_IF
+
+E_ClampState.Clamped:
+    IF NOT bCmdClose THEN
+        eState := E_ClampState.Opening;
+        tStart := TIME();
+    ELSIF NOT bPressureOk THEN
+        eState := E_ClampState.Fault;
+        bPressureFault := TRUE;
+    END_IF
+
+E_ClampState.Opening:
+    IF bCmdClose THEN
+        eState := E_ClampState.Closing;
+        tStart := TIME();
+    ELSIF bSensorOpen THEN
+        eState := E_ClampState.Open;
+        fLastSwitchTime_ms := TIME_TO_LREAL(TIME() - tStart);
+    ELSIF tonTimeout.Q THEN
+        eState := E_ClampState.Fault;
+        bTimeoutFault := TRUE;
+    END_IF
+
+E_ClampState.Fault:
+    // bleibt bis ResetFault(); Ventil folgt weiter dem Kommando
+    ;
+END_CASE
+]]></ST>
+    </Implementation>
+    <Method Name="Close" Id="{aad6d455-139d-5ea1-8369-9a92d496da9e}">
+      <Declaration><![CDATA[METHOD Close : BOOL
+VAR_INPUT
+END_VAR
+]]></Declaration>
+      <Implementation>
+        <ST><![CDATA[bCmdClose := TRUE;
+Close := TRUE;
+]]></ST>
+      </Implementation>
+    </Method>
+    <Method Name="Open" Id="{21611771-ffff-5d6a-a327-7035c70542d6}">
+      <Declaration><![CDATA[METHOD Open : BOOL
+VAR_INPUT
+END_VAR
+]]></Declaration>
+      <Implementation>
+        <ST><![CDATA[bCmdClose := FALSE;
+Open := TRUE;
+]]></ST>
+      </Implementation>
+    </Method>
+    <Method Name="ResetFault" Id="{6567cef7-68e8-5e23-9015-53211eb22c47}">
+      <Declaration><![CDATA[METHOD ResetFault : BOOL
+VAR_INPUT
+END_VAR
+]]></Declaration>
+      <Implementation>
+        <ST><![CDATA[IF eState = E_ClampState.Fault THEN
+    bTimeoutFault := FALSE;
+    bPressureFault := FALSE;
+    eState := E_ClampState.Unknown;
+END_IF
+ResetFault := TRUE;
+]]></ST>
+      </Implementation>
+    </Method>
+    <Method Name="IsOpen" Id="{c192c712-86b8-56a1-8001-788434a7db8a}">
+      <Declaration><![CDATA[METHOD IsOpen : BOOL
+VAR_INPUT
+END_VAR
+]]></Declaration>
+      <Implementation>
+        <ST><![CDATA[IsOpen := eState = E_ClampState.Open;
+]]></ST>
+      </Implementation>
+    </Method>
+    <Method Name="IsClamped" Id="{055e9054-64db-583f-80e9-f341b7a63307}">
+      <Declaration><![CDATA[METHOD IsClamped : BOOL
+VAR_INPUT
+END_VAR
+]]></Declaration>
+      <Implementation>
+        <ST><![CDATA[IsClamped := eState = E_ClampState.Clamped;
+]]></ST>
+      </Implementation>
+    </Method>
+    <Method Name="IsCommandedClosed" Id="{cd878e4e-b457-5eba-b170-b1b46d63c8ae}">
+      <Declaration><![CDATA[METHOD IsCommandedClosed : BOOL
+VAR_INPUT
+END_VAR
+]]></Declaration>
+      <Implementation>
+        <ST><![CDATA[IsCommandedClosed := bCmdClose;
+]]></ST>
+      </Implementation>
+    </Method>
+  </POU>
+</TcPlcObject>

@@ -1,0 +1,14 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<TcPlcObject Version="1.1.0.1">
+  <GVL Name="GVL_Devices" Id="{4d5844a1-85af-5679-a5e4-8bc2c68a4f6c}">
+    <Declaration><![CDATA[// Geräteinstanzen. MAIN ruft sie zyklisch auf; Ablauf und HMI-Bausteine rufen nur ihre Methoden.
+{attribute 'qualified_only'}
+VAR_GLOBAL
+    aAxis   : ARRAY[1..5] OF FB_Axis;    // Index = E_Axis
+    aClamp  : ARRAY[1..6] OF FB_Clamp;
+    fbKin   : FB_BendKinematics;
+    fbAlarm : FB_AlarmManager;
+END_VAR
+]]></Declaration>
+  </GVL>
+</TcPlcObject>

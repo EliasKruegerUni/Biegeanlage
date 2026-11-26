@@ -1,0 +1,16 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<TcPlcObject Version="1.1.0.1">
+  <DUT Name="E_G0Step" Id="{fe347f17-6d58-59ce-bfcd-4433d76f8571}">
+    <Declaration><![CDATA[// GRAFCET G0 Not-Halt [Langfeld].
+{attribute 'qualified_only'}
+{attribute 'strict'}
+{attribute 'to_string'}
+TYPE E_G0Step :
+(
+    S1_Betrieb := 1,
+    S2_NotHalt := 2
+) INT;
+END_TYPE
+]]></Declaration>
+  </DUT>
+</TcPlcObject>

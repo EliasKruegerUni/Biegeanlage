@@ -1,0 +1,16 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<TcPlcObject Version="1.1.0.1">
+  <GVL Name="GVL_Axis" Id="{8f8fa457-322d-58fd-9639-b7d3ddd81fac}">
+    <Declaration><![CDATA[// NC-Achsen. Im System Manager unter MOTION > NC-Task > Achsen > (Achse) > Einstellungen > „Mit SPS verknüpfen“
+// die passende Variable wählen: Z1 -> GVL_Axis.Z1 usw.
+{attribute 'qualified_only'}
+VAR_GLOBAL
+    Z1 : AXIS_REF;   // Vorschub
+    Z2 : AXIS_REF;   // Führung („Eisenschwein“)
+    X  : AXIS_REF;   // Matrizenauslenkung
+    A  : AXIS_REF;   // Matrizendrehung
+    W  : AXIS_REF;   // Rohrdrehung
+END_VAR
+]]></Declaration>
+  </GVL>
+</TcPlcObject>

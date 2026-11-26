@@ -1,0 +1,413 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<TcPlcObject Version="1.1.0.1">
+  <POU Name="FB_HmiCommand" Id="{3afcf576-e0f6-514d-9ac5-991bdad5fec7}" SpecialFunc="None">
+    <Declaration><![CDATA[// Heartbeat-Überwachung, Kommando-Handshake und Tippen (docs/hmi-schnittstelle.md).
+// Jede neue nCmdId wird genau einmal geprüft; Antwort: eResult, nDetail und zuletzt nAckId.
+// Accepted heißt nur „angenommen“; den Fortschritt zeigt stStatus.
+FUNCTION_BLOCK FB_HmiCommand
+VAR_IN_OUT
+    fbMode : FB_ModeManager;
+    fbSeq : FB_BendSequence;
+    fbPlan : FB_PlanStore;
+END_VAR
+VAR_INPUT
+    dwBaseMissing : DWORD;
+    bSimulation : BOOL;
+END_VAR
+VAR_OUTPUT
+    bHmiAlive : BOOL;
+END_VAR
+VAR
+    bInit : BOOL := TRUE;
+    nLastCmdId : UDINT;
+    nLastHb : UDINT;
+    bHbSeen : BOOL;
+    tonHb : TON;
+    eRes : E_CmdResult;
+    nDetail : UDINT;
+    nJogAxis : INT;
+    i : INT;
+END_VAR
+]]></Declaration>
+    <Implementation>
+      <ST><![CDATA[IF bInit THEN
+    bInit := FALSE;
+    nLastCmdId := GVL_HMI.stCmd.nCmdId;
+    nLastHb := GVL_HMI.stCmd.nHeartbeat;
+    GVL_HMI.stStatus.stCmdAck.nAckId := nLastCmdId;
+    GVL_HMI.stStatus.stParamActive.nPlanId := 0;
+    GVL_HMI.stStatus.stParamActive.stMaterial.fDiameter_mm := 15.0;
+    GVL_HMI.stStatus.stParamActive.stMaterial.fWall_mm := 2.0;
+    GVL_HMI.stStatus.stParamActive.stMaterial.fYield_MPa := 300.0;
+    GVL_HMI.stStatus.stParamActive.stMaterial.fForceLimit_N := 16000.0;
+    GVL_HMI.stStatus.stParamActive.fFeedOverride_pct := 100.0;
+    GVL_HMI.stStatus.stParamActive.fSingleAxisVelo_pct := 100.0;
+END_IF
+
+// ── Heartbeat: jede Änderung von nHeartbeat ist ein Lebenszeichen ──
+IF GVL_HMI.stCmd.nHeartbeat <> nLastHb THEN
+    nLastHb := GVL_HMI.stCmd.nHeartbeat;
+    bHbSeen := TRUE;
+    tonHb(IN := FALSE);
+END_IF
+tonHb(IN := TRUE, PT := GVL_Config.tHeartbeatTimeout);
+IF bHmiAlive AND (tonHb.Q OR NOT bHbSeen) THEN
+    bHmiAlive := FALSE;
+    GVL_Devices.fbAlarm.Raise(E_AlarmCode.HmiHeartbeatLost, E_AlarmSeverity.Stop, 0, 0);
+    FOR i := 1 TO 5 DO
+        IF GVL_Devices.aAxis[i].bBusy AND NOT GVL_Devices.aAxis[i].bLockedByKin THEN
+            GVL_Devices.aAxis[i].Halt();
+        END_IF
+    END_FOR
+ELSIF NOT bHmiAlive AND bHbSeen AND NOT tonHb.Q THEN
+    bHmiAlive := TRUE;
+    GVL_Devices.fbAlarm.Clear(E_AlarmCode.HmiHeartbeatLost, 0, FALSE);
+END_IF
+
+// ── Kommando ──
+IF GVL_HMI.stCmd.nCmdId <> nLastCmdId THEN
+    nLastCmdId := GVL_HMI.stCmd.nCmdId;
+    nDetail := 0;
+    eRes := Execute();
+    GVL_HMI.stStatus.stCmdAck.eResult := eRes;
+    GVL_HMI.stStatus.stCmdAck.nDetail := nDetail;
+    GVL_HMI.stStatus.stCmdAck.nAckId := nLastCmdId;   // zuletzt
+END_IF
+
+Jog();
+]]></ST>
+    </Implementation>
+    <Method Name="Execute" Id="{c1b64359-5a41-5b35-8ec8-ead868a57ab9}">
+      <Declaration><![CDATA[METHOD PRIVATE Execute : E_CmdResult
+VAR
+    nAx : INT;
+    fTarget, fVMax, fDelta : LREAL;
+    nBlk : INT;
+    stKin : ST_KinStatus;
+    eMode : E_OperatingMode;
+    dwNotReady : DWORD;
+    bCoupled : BOOL;
+END_VAR
+]]></Declaration>
+      <Implementation>
+        <ST><![CDATA[nAx := TO_INT(GVL_HMI.stCmd.eAxis);
+eMode := fbMode.eMode;
+stKin := GVL_Devices.fbKin.GetStatus();
+bCoupled := GVL_Devices.fbKin.IsCoupled();
+
+CASE GVL_HMI.stCmd.eCmd OF
+E_HmiCmd.AlarmAck:
+    GVL_Devices.fbAlarm.Ack(GVL_HMI.stCmd.nValue);
+    fbMode.Acknowledge();
+    FOR i := 1 TO 6 DO
+        IF NOT GVL_Devices.aClamp[i].IsCommandedClosed() THEN
+            GVL_Devices.aClamp[i].ResetFault();
+        END_IF
+    END_FOR
+    IF stKin.eState = E_KinState.Fault AND NOT GVL_Devices.fbAlarm.FaultActive() THEN
+        IF GVL_Devices.fbKin.Reset() THEN
+            fbSeq.AbortRun();
+        END_IF
+    END_IF
+    Execute := E_CmdResult.Accepted;
+
+E_HmiCmd.ParamApply:
+    IF bCoupled THEN
+        Execute := E_CmdResult.RejectedMode;
+    ELSIF GVL_HMI.stParam.fFeedOverride_pct < 0.0 OR GVL_HMI.stParam.fFeedOverride_pct > 100.0
+          OR GVL_HMI.stParam.fSingleAxisVelo_pct <= 0.0 OR GVL_HMI.stParam.fSingleAxisVelo_pct > 100.0
+          OR GVL_HMI.stParam.stMaterial.fDiameter_mm <= 0.0 OR GVL_HMI.stParam.stMaterial.fForceLimit_N <= 0.0 THEN
+        Execute := E_CmdResult.RejectedParam;
+    ELSE
+        GVL_HMI.stStatus.stParamActive := GVL_HMI.stParam;
+        GVL_HMI.stStatus.stParamActive.stMaterial.fForceLimit_N :=
+            MIN(GVL_HMI.stParam.stMaterial.fForceLimit_N, GVL_Config.fForceLimitMax_N);
+        Execute := E_CmdResult.Accepted;
+    END_IF
+
+E_HmiCmd.AxisEnable, E_HmiCmd.AxisDisable, E_HmiCmd.AxisReset, E_HmiCmd.AxisHalt, E_HmiCmd.AxisMoveAbs:
+    IF nAx < 1 OR nAx > 5 THEN
+        Execute := E_CmdResult.RejectedParam;
+        RETURN;
+    END_IF
+    CASE GVL_HMI.stCmd.eCmd OF
+    E_HmiCmd.AxisEnable:      // Phase-4-Ausnahme: ohne Betriebsartenprüfung
+        IF GVL_IO.bEStopActive OR NOT GVL_IO.bSafetyOk THEN
+            Execute := E_CmdResult.RejectedInterlock;
+            nDetail := 1100;
+        ELSE
+            GVL_Devices.aAxis[nAx].Enable();
+            Execute := E_CmdResult.Accepted;
+        END_IF
+    E_HmiCmd.AxisDisable:
+        IF GVL_Devices.aAxis[nAx].bLockedByKin THEN
+            Execute := E_CmdResult.RejectedBusy;
+        ELSE
+            GVL_Devices.aAxis[nAx].Disable();
+            Execute := E_CmdResult.Accepted;
+        END_IF
+    E_HmiCmd.AxisReset:
+        IF eMode <> E_OperatingMode.SingleAxis AND eMode <> E_OperatingMode.Pause THEN
+            Execute := E_CmdResult.RejectedMode;
+        ELSE
+            {IF defined (SIM)}
+            GVL_Sim.abAxisFault[nAx] := FALSE;
+            {END_IF}
+            GVL_Devices.aAxis[nAx].Reset();
+            GVL_Devices.fbAlarm.Clear(E_AlarmCode.AxisLagError, nAx, FALSE);
+            Execute := E_CmdResult.Accepted;
+        END_IF
+    E_HmiCmd.AxisHalt:
+        IF GVL_Devices.aAxis[nAx].bLockedByKin THEN
+            GVL_Devices.fbKin.Hold();
+        ELSE
+            GVL_Devices.aAxis[nAx].Halt();
+        END_IF
+        Execute := E_CmdResult.Accepted;
+    E_HmiCmd.AxisMoveAbs:
+        IF eMode <> E_OperatingMode.SingleAxis THEN
+            Execute := E_CmdResult.RejectedMode;
+            RETURN;
+        END_IF
+        IF NOT GVL_Devices.aAxis[nAx].bReady THEN
+            Execute := E_CmdResult.RejectedInterlock;
+            nDetail := 1;
+            RETURN;
+        END_IF
+        IF GVL_Devices.aAxis[nAx].bLockedByKin THEN
+            Execute := E_CmdResult.RejectedBusy;
+            RETURN;
+        END_IF
+        fVMax := GVL_Config.aAxisVSetup[nAx] * GVL_HMI.stStatus.stParamActive.fSingleAxisVelo_pct / 100.0;
+        IF GVL_HMI.stCmd.fVelocity <= 0.0 OR GVL_HMI.stCmd.fVelocity > fVMax + 1.0E-9 THEN
+            Execute := E_CmdResult.RejectedParam;
+            nDetail := 2;
+            RETURN;
+        END_IF
+        fTarget := GVL_HMI.stCmd.fPosition;
+        IF nAx = 5 THEN     // W: kürzester Weg zur Anzeigeposition 0..360°
+            fDelta := F_Mod360(fTarget - F_Mod360(GVL_Devices.aAxis[5].fActPos) + 180.0) - 180.0;
+            fTarget := GVL_Devices.aAxis[5].fActPos + fDelta;
+        ELSIF fTarget < GVL_Config.aAxisMin[nAx] OR fTarget > GVL_Config.aAxisMax[nAx] THEN
+            Execute := E_CmdResult.RejectedParam;
+            nDetail := 1;
+            RETURN;
+        END_IF
+        IF nAx = 1 THEN
+            IF fTarget > F_Z1Max(GVL_Devices.aAxis[2].fActPos) + 1.0E-9 THEN
+                Execute := E_CmdResult.RejectedInterlock;
+                nDetail := 4000;
+                RETURN;
+            END_IF
+            nBlk := F_ClampBlocking(GVL_Devices.aAxis[1].fActPos, fTarget);
+            IF nBlk <> 0 THEN
+                Execute := E_CmdResult.RejectedInterlock;
+                nDetail := 3002;
+                RETURN;
+            END_IF
+        ELSIF nAx = 2 THEN
+            IF GVL_Devices.aAxis[1].fActPos > F_Z1Max(fTarget) + 1.0E-9 THEN
+                Execute := E_CmdResult.RejectedInterlock;
+                nDetail := 4000;
+                RETURN;
+            END_IF
+        END_IF
+        GVL_Devices.aAxis[nAx].MoveAbs(fTarget, GVL_HMI.stCmd.fVelocity);
+        Execute := E_CmdResult.Accepted;
+    END_CASE
+
+E_HmiCmd.ClampOpen, E_HmiCmd.ClampClose:
+    IF eMode <> E_OperatingMode.SingleAxis THEN
+        Execute := E_CmdResult.RejectedMode;
+    ELSIF GVL_HMI.stCmd.nClamp < 1 OR GVL_HMI.stCmd.nClamp > 6 THEN
+        Execute := E_CmdResult.RejectedParam;
+    ELSIF GVL_HMI.stCmd.eCmd = E_HmiCmd.ClampClose THEN
+        IF F_ChuckInZone((USINT_TO_INT(GVL_HMI.stCmd.nClamp) + 1) / 2, GVL_Devices.aAxis[1].fActPos) THEN
+            Execute := E_CmdResult.RejectedInterlock;
+            nDetail := 3002;
+        ELSE
+            GVL_Devices.aClamp[GVL_HMI.stCmd.nClamp].Close();
+            Execute := E_CmdResult.Accepted;
+        END_IF
+    ELSE
+        GVL_Devices.aClamp[GVL_HMI.stCmd.nClamp].Open();
+        Execute := E_CmdResult.Accepted;
+    END_IF
+
+E_HmiCmd.ModePause:
+    Execute := fbMode.CmdPause();
+E_HmiCmd.ModeResume1, E_HmiCmd.ModeSingleAxis1:
+    Execute := fbMode.CmdFirstStage(GVL_HMI.stCmd.eCmd);
+E_HmiCmd.ModeResume2, E_HmiCmd.ModeSingleAxis2:
+    Execute := fbMode.CmdSecondStage(GVL_HMI.stCmd.eCmd, bHmiAlive, FaultActive());
+E_HmiCmd.ModeReturnToBase:
+    Execute := fbMode.CmdReturnToBase(dwMissing := dwBaseMissing, nDetail => nDetail);
+
+E_HmiCmd.SimSetInput, E_HmiCmd.SimInjectFault:
+    {IF defined (SIM)}
+    Execute := Simulate();
+    {ELSE}
+    Execute := E_CmdResult.RejectedMode;
+    {END_IF}
+
+E_HmiCmd.PlanLoad:
+    IF NOT fbSeq.CanLoadPlan() OR bCoupled THEN
+        Execute := E_CmdResult.RejectedBusy;
+        RETURN;
+    END_IF
+    nDetail := fbPlan.Load(DINT_TO_UDINT(GVL_HMI.stCmd.nValue));
+    IF nDetail <> 0 THEN
+        Execute := E_CmdResult.RejectedParam;
+        RETURN;
+    END_IF
+    IF NOT GVL_Devices.fbKin.LoadPlan(DINT_TO_UDINT(GVL_HMI.stCmd.nValue)) THEN
+        Execute := E_CmdResult.RejectedBusy;
+        RETURN;
+    END_IF
+    fbSeq.SetMaterial(FALSE);
+    Execute := E_CmdResult.Accepted;
+
+E_HmiCmd.MaterialConfirm:
+    IF stKin.nPlanId = 0 OR stKin.nPlanId <> DINT_TO_UDINT(GVL_HMI.stCmd.nValue) THEN
+        Execute := E_CmdResult.RejectedParam;
+    ELSE
+        fbSeq.SetMaterial(TRUE);
+        Execute := E_CmdResult.Accepted;
+    END_IF
+
+E_HmiCmd.SeqStart:
+    dwNotReady := 0;
+    FOR i := 1 TO 5 DO
+        IF NOT GVL_Devices.aAxis[i].bReady THEN
+            dwNotReady := dwNotReady OR SHL(DWORD#1, i);
+        END_IF
+    END_FOR
+    IF eMode <> E_OperatingMode.Automatic THEN
+        Execute := E_CmdResult.RejectedMode;
+    ELSIF stKin.eState <> E_KinState.Loaded OR NOT GVL_Plan.bValid THEN
+        Execute := E_CmdResult.RejectedInterlock;
+        nDetail := 16#100;
+    ELSIF NOT fbSeq.bMaterialOk THEN
+        Execute := E_CmdResult.RejectedInterlock;
+        nDetail := 16#200;
+    ELSIF GVL_IO.bEStopActive THEN
+        Execute := E_CmdResult.RejectedInterlock;
+        nDetail := 1100;
+    ELSIF NOT bHmiAlive THEN
+        Execute := E_CmdResult.RejectedInterlock;
+        nDetail := 1001;
+    ELSIF dwNotReady <> 0 THEN
+        Execute := E_CmdResult.RejectedInterlock;
+        nDetail := 16#10000 OR DWORD_TO_UDINT(dwNotReady);
+    ELSIF FaultActive() THEN
+        Execute := E_CmdResult.RejectedInterlock;
+        nDetail := 16#40;
+    ELSE
+        Execute := fbSeq.Start(dwBaseMissing := dwBaseMissing, nDetail => nDetail);
+    END_IF
+
+E_HmiCmd.SeqConfirmQ1:
+    Execute := fbSeq.ConfirmQ1();
+E_HmiCmd.SeqConfirmQ2:
+    Execute := fbSeq.ConfirmQ2();
+E_HmiCmd.SeqPartRemoved:
+    Execute := fbSeq.PartRemoved();
+
+ELSE
+    Execute := E_CmdResult.RejectedUnknown;   // CalibrateAxis und unbekannte Kommandos
+END_CASE
+]]></ST>
+      </Implementation>
+    </Method>
+    <Method Name="FaultActive" Id="{6cbc7d91-a79e-5e14-a7fc-df319d9fa211}">
+      <Declaration><![CDATA[METHOD PRIVATE FaultActive : BOOL
+VAR
+    k : INT;
+END_VAR
+]]></Declaration>
+      <Implementation>
+        <ST><![CDATA[FaultActive := GVL_Devices.fbAlarm.FaultActive();
+FOR k := 1 TO 5 DO
+    IF GVL_Devices.aAxis[k].bError THEN
+        FaultActive := TRUE;
+    END_IF
+END_FOR
+]]></ST>
+      </Implementation>
+    </Method>
+    <Method Name="Simulate" Id="{6dae31e7-46af-5704-b70c-0f4a0d0631d3}">
+      <Declaration><![CDATA[METHOD PRIVATE Simulate : E_CmdResult
+// SimSetInput: nValue 1 Druckschalter, 2 Not-Halt; fPosition <> 0 = TRUE.
+// SimInjectFault: 1 Achsfehler Z1, 2 X, 3 A, 4 Druckabfall, 5 Not-Halt, 6 Schleppfehler-Warnung Z1.
+VAR
+END_VAR
+]]></Declaration>
+      <Implementation>
+        <ST><![CDATA[Simulate := E_CmdResult.Accepted;
+IF GVL_HMI.stCmd.eCmd = E_HmiCmd.SimSetInput THEN
+    CASE GVL_HMI.stCmd.nValue OF
+    1: GVL_Sim.bPressureOk := GVL_HMI.stCmd.fPosition <> 0.0;
+    2: GVL_Sim.bEStop := GVL_HMI.stCmd.fPosition <> 0.0;
+    ELSE
+        Simulate := E_CmdResult.RejectedParam;
+    END_CASE
+ELSE
+    CASE GVL_HMI.stCmd.nValue OF
+    1: GVL_Sim.abAxisFault[1] := TRUE;
+    2: GVL_Sim.abAxisFault[3] := TRUE;
+    3: GVL_Sim.abAxisFault[4] := TRUE;
+    4: GVL_Sim.bPressureOk := FALSE;
+    5: GVL_Sim.bEStop := TRUE;
+    6: GVL_Devices.fbAlarm.Raise(E_AlarmCode.AxisLagError, E_AlarmSeverity.Warning, 1, 123);
+    ELSE
+        Simulate := E_CmdResult.RejectedParam;
+    END_CASE
+END_IF
+]]></ST>
+      </Implementation>
+    </Method>
+    <Method Name="Jog" Id="{1b3d132b-d5a4-55bc-93ff-ab3dcc8a2588}">
+      <Declaration><![CDATA[METHOD PRIVATE Jog
+VAR
+    nAx : INT;
+    nDir : INT;
+    bOk : BOOL;
+    fVel : LREAL;
+END_VAR
+]]></Declaration>
+      <Implementation>
+        <ST><![CDATA[nAx := TO_INT(GVL_HMI.stCmd.stJog.eAxis);
+nDir := SINT_TO_INT(GVL_HMI.stCmd.stJog.nDirection);
+bOk := fbMode.eMode = E_OperatingMode.SingleAxis AND bHmiAlive AND (nDir = 1 OR nDir = -1) AND nAx >= 1 AND nAx <= 5;
+IF bOk THEN
+    bOk := GVL_Devices.aAxis[nAx].bReady AND NOT GVL_Devices.aAxis[nAx].bLockedByKin;
+END_IF
+IF bOk AND nAx = 1 AND nDir > 0 THEN
+    // nicht über die Kollisionsgrenze und nicht in eine Zone mit geschlossenem Niederhalter tippen
+    bOk := GVL_Devices.aAxis[1].fActPos < F_Z1Max(GVL_Devices.aAxis[2].fActPos) - 1.0
+           AND F_ClampBlocking(GVL_Devices.aAxis[1].fActPos, GVL_Devices.aAxis[1].fActPos + 2.0) = 0;
+END_IF
+IF bOk AND nAx = 1 AND nDir < 0 THEN
+    bOk := F_ClampBlocking(GVL_Devices.aAxis[1].fActPos, GVL_Devices.aAxis[1].fActPos - 2.0) = 0;
+END_IF
+IF bOk AND nAx >= 1 AND nAx <= 4 THEN
+    bOk := (nDir > 0 AND GVL_Devices.aAxis[nAx].fActPos < GVL_Config.aAxisMax[nAx])
+        OR (nDir < 0 AND GVL_Devices.aAxis[nAx].fActPos > GVL_Config.aAxisMin[nAx]);
+END_IF
+IF nJogAxis <> 0 AND (NOT bOk OR nAx <> nJogAxis) THEN
+    GVL_Devices.aAxis[nJogAxis].StopJog();
+    nJogAxis := 0;
+END_IF
+IF bOk THEN
+    fVel := GVL_Config.aAxisVSetup[nAx] * LIMIT(0.0, GVL_HMI.stCmd.stJog.fVelocityFactor_pct, 100.0) / 100.0
+            * GVL_HMI.stStatus.stParamActive.fSingleAxisVelo_pct / 100.0;
+    IF fVel > 0.0 THEN
+        GVL_Devices.aAxis[nAx].Jog(nDir, fVel);
+        nJogAxis := nAx;
+    END_IF
+END_IF
+]]></ST>
+      </Implementation>
+    </Method>
+  </POU>
+</TcPlcObject>

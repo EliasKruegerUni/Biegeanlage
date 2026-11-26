@@ -1,0 +1,26 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<TcPlcObject Version="1.1.0.1">
+  <POU Name="F_Mod360" Id="{d5b24fa3-27a9-5aae-ad12-f7ce5ac9c5de}" SpecialFunc="None">
+    <Declaration><![CDATA[// Winkel auf 0 <= Ergebnis < 360 abbilden.
+FUNCTION F_Mod360 : LREAL
+VAR_INPUT
+    fAngle : LREAL;
+END_VAR
+VAR
+    fR : LREAL;
+END_VAR
+]]></Declaration>
+    <Implementation>
+      <ST><![CDATA[// LREAL_TO_LINT rundet; das Ergebnis liegt dann in [-180, 180] und wird unten korrigiert.
+fR := fAngle - 360.0 * LINT_TO_LREAL(LREAL_TO_LINT(fAngle / 360.0));
+IF fR < 0.0 THEN
+    fR := fR + 360.0;
+END_IF
+IF fR >= 360.0 THEN
+    fR := fR - 360.0;
+END_IF
+F_Mod360 := fR;
+]]></ST>
+    </Implementation>
+  </POU>
+</TcPlcObject>

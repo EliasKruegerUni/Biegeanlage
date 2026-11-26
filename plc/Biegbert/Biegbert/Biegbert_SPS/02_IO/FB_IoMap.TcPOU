@@ -1,0 +1,84 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<TcPlcObject Version="1.1.0.1">
+  <POU Name="FB_IoMap" Id="{99a58caf-cd16-5d8f-8d54-472f95f0d030}" SpecialFunc="None">
+    <Declaration><![CDATA[// Einzige Stelle mit Zugriff auf das Prozessabbild (E4). Füllt die logischen Signale aus Hardware oder Simulation.
+FUNCTION_BLOCK FB_IoMap
+VAR
+    fbSim : FB_IoSim;
+    i : INT;
+END_VAR
+]]></Declaration>
+    <Implementation>
+      <ST><![CDATA[// Aufruf über ReadInputs() und WriteOutputs().
+]]></ST>
+    </Implementation>
+    <Method Name="ReadInputs" Id="{01f9ca38-e895-5831-8c6a-403273ba0675}">
+      <Declaration><![CDATA[METHOD ReadInputs
+VAR_INPUT
+END_VAR
+]]></Declaration>
+      <Implementation>
+        <ST><![CDATA[{IF defined (SIM)}
+fbSim(abValve := GVL_IO.abClampValve);
+GVL_IO.abClampOpen := fbSim.abClampOpen;
+GVL_IO.bPressureOk := GVL_Sim.bPressureOk;
+GVL_IO.bEStopActive := GVL_Sim.bEStop;
+GVL_IO.bSafetyOk := NOT GVL_Sim.bEStop;
+FOR i := 1 TO 16 DO
+    GVL_IO.abPanel[i] := FALSE;
+END_FOR
+FOR i := 1 TO 5 DO
+    GVL_IO.afTorque_Nm[i] := 0.0;
+END_FOR
+{ELSE}
+GVL_IO.abClampOpen := GVL_IO.abClampOpenIn;
+GVL_IO.bPressureOk := GVL_IO.bPressureOkIn;
+GVL_IO.bEStopActive := NOT GVL_IO.bEStopReleasedIn;
+GVL_IO.bSafetyOk := GVL_IO.bSafetyOkIn;
+GVL_IO.abPanel := GVL_IO.abPanelIn;
+FOR i := 1 TO 5 DO
+    GVL_IO.afTorque_Nm[i] := INT_TO_LREAL(GVL_IO.anTorqueIn[i]) * 0.001 * GVL_Config.aRatedTorque_Nm[i];
+END_FOR
+{END_IF}
+]]></ST>
+      </Implementation>
+    </Method>
+    <Method Name="WriteOutputs" Id="{d81d3825-f8b6-5265-a158-ff9b82d6db52}">
+      <Declaration><![CDATA[METHOD WriteOutputs
+VAR_INPUT
+END_VAR
+]]></Declaration>
+      <Implementation>
+        <ST><![CDATA[{IF defined (SIM)}
+// keine Hardware: Ausgänge bleiben aus
+FOR i := 1 TO 6 DO
+    GVL_IO.abClampValveOut[i] := FALSE;
+END_FOR
+FOR i := 1 TO 16 DO
+    GVL_IO.abPanelOut[i] := FALSE;
+END_FOR
+GVL_IO.bCameraTriggerOut := FALSE;
+{ELSE}
+GVL_IO.abClampValveOut := GVL_IO.abClampValve;
+GVL_IO.abPanelOut := GVL_IO.abPanelLamp;
+GVL_IO.bCameraTriggerOut := GVL_IO.bCameraTrigger;
+{END_IF}
+]]></ST>
+      </Implementation>
+    </Method>
+    <Method Name="IsSimulation" Id="{da45fae5-d22c-5bb4-be8c-928b0b93a712}">
+      <Declaration><![CDATA[METHOD IsSimulation : BOOL
+VAR_INPUT
+END_VAR
+]]></Declaration>
+      <Implementation>
+        <ST><![CDATA[{IF defined (SIM)}
+IsSimulation := TRUE;
+{ELSE}
+IsSimulation := FALSE;
+{END_IF}
+]]></ST>
+      </Implementation>
+    </Method>
+  </POU>
+</TcPlcObject>

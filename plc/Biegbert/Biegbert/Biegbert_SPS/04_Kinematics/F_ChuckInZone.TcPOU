@@ -1,0 +1,19 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<TcPlcObject Version="1.1.0.1">
+  <POU Name="F_ChuckInZone" Id="{11abdb7c-a2c7-5149-8517-4a5a9f2e5f86}" SpecialFunc="None">
+    <Declaration><![CDATA[// TRUE, wenn das Futter bei Z1 = fZ1 die Zone des Niederhalterpaares nPair (1..3) berührt.
+FUNCTION F_ChuckInZone : BOOL
+VAR_INPUT
+    nPair : INT;
+    fZ1 : LREAL;
+END_VAR
+]]></Declaration>
+    <Implementation>
+      <ST><![CDATA[IF nPair < 1 OR nPair > 3 THEN
+    RETURN;
+END_IF
+F_ChuckInZone := fZ1 > GVL_Config.aClampZoneLo_mm[nPair] AND fZ1 < GVL_Config.aClampZoneHi_mm[nPair];
+]]></ST>
+    </Implementation>
+  </POU>
+</TcPlcObject>

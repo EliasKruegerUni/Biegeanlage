@@ -1,0 +1,202 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<TcPlcObject Version="1.1.0.1">
+  <POU Name="FB_ModeManager" Id="{14c5d53f-0e73-5bcd-87b8-fe2c83d50726}" SpecialFunc="None">
+    <Declaration><![CDATA[// GRAFCET G0 (Not-Halt) und G1 (Betriebsarten) nach [Langfeld].
+// 10 Automatik, 11 Pause (Startzustand), 12 Einzelachsen, 13 Rückkehr Grundzustand (ein Zyklus, initialisiert G2/G3).
+// Zweistufige Kommandos (S3): erste Stufe und zweite Stufe innerhalb GVL_Config.tTwoStepConfirmation.
+FUNCTION_BLOCK FB_ModeManager
+VAR_INPUT
+    bEStopActive : BOOL;
+    bSafetyOk : BOOL;
+    nStopCounter : UDINT;       // FB_AlarmManager.nStopCounter: neuer Alarm >= Stop -> Pause
+END_VAR
+VAR_OUTPUT
+    eMode : E_OperatingMode := E_OperatingMode.Pause;
+    eG0 : E_G0Step := E_G0Step.S1_Betrieb;
+    bFree : BOOL;               // FREI = X10: Abläufe dürfen fahren
+    bEnteredPause : BOOL;       // Impuls
+    bEnteredSingle : BOOL;      // Impuls: Abläufe abbrechen, Kopplung lösen
+    bInitSequences : BOOL;      // Impuls aus Schritt 13: G2 := 20, G3 := 30
+    bEnteredAutomatic : BOOL;   // Impuls (Wiederanlauf)
+END_VAR
+VAR
+    nLastStop : UDINT;
+    bInit : BOOL := TRUE;
+    eFirst : E_HmiCmd := E_HmiCmd.None;
+    tFirst : TIME;
+    bAckReq : BOOL;
+    bSingleReq, bInitReq, bAutoReq, bPauseReq : BOOL;
+    eLastMode : E_OperatingMode := E_OperatingMode.Pause;
+END_VAR
+]]></Declaration>
+    <Implementation>
+      <ST><![CDATA[IF bInit THEN
+    nLastStop := nStopCounter;
+    bInit := FALSE;
+END_IF
+
+// G0 Not-Halt
+CASE eG0 OF
+E_G0Step.S1_Betrieb:
+    IF bEStopActive THEN
+        eG0 := E_G0Step.S2_NotHalt;
+    END_IF
+E_G0Step.S2_NotHalt:
+    IF NOT bEStopActive AND bSafetyOk AND bAckReq THEN
+        eG0 := E_G0Step.S1_Betrieb;
+    END_IF
+END_CASE
+bAckReq := FALSE;
+IF eG0 = E_G0Step.S2_NotHalt AND (eMode = E_OperatingMode.Automatic OR eMode = E_OperatingMode.ReturnToBase) THEN
+    eMode := E_OperatingMode.Pause;
+END_IF
+
+// Neuer Alarm der Stufe Stop oder Fault -> Pause
+IF nStopCounter <> nLastStop THEN
+    nLastStop := nStopCounter;
+    IF eMode = E_OperatingMode.Automatic OR eMode = E_OperatingMode.ReturnToBase THEN
+        eMode := E_OperatingMode.Pause;
+    END_IF
+END_IF
+
+// Schritt 13: G2/G3 initialisieren, dann Automatik
+bInitSequences := bInitReq;
+bInitReq := FALSE;
+IF eMode = E_OperatingMode.ReturnToBase AND bInitSequences THEN
+    eMode := E_OperatingMode.Automatic;
+END_IF
+
+bEnteredSingle := bSingleReq;
+bSingleReq := FALSE;
+bEnteredAutomatic := (eMode = E_OperatingMode.Automatic) AND (eLastMode <> E_OperatingMode.Automatic);
+bEnteredPause := (eMode = E_OperatingMode.Pause) AND (eLastMode <> E_OperatingMode.Pause);
+eLastMode := eMode;
+bFree := eMode = E_OperatingMode.Automatic AND eG0 = E_G0Step.S1_Betrieb;
+]]></ST>
+    </Implementation>
+    <Method Name="CmdPause" Id="{ae75cb59-8852-5dad-aecf-acded3ac879c}">
+      <Declaration><![CDATA[METHOD CmdPause : E_CmdResult
+VAR_INPUT
+END_VAR
+]]></Declaration>
+      <Implementation>
+        <ST><![CDATA[IF eMode <> E_OperatingMode.Automatic AND eMode <> E_OperatingMode.ReturnToBase THEN
+    CmdPause := E_CmdResult.RejectedMode;
+    RETURN;
+END_IF
+eMode := E_OperatingMode.Pause;
+CmdPause := E_CmdResult.Accepted;
+]]></ST>
+      </Implementation>
+    </Method>
+    <Method Name="CmdFirstStage" Id="{22acf5cf-0fee-516b-b747-23633c166bb5}">
+      <Declaration><![CDATA[METHOD CmdFirstStage : E_CmdResult
+// ModeResume1 oder ModeSingleAxis1
+VAR_INPUT
+    eCmd : E_HmiCmd;
+END_VAR
+]]></Declaration>
+      <Implementation>
+        <ST><![CDATA[IF eMode <> E_OperatingMode.Pause THEN
+    CmdFirstStage := E_CmdResult.RejectedMode;
+    RETURN;
+END_IF
+eFirst := eCmd;
+tFirst := TIME();
+CmdFirstStage := E_CmdResult.Accepted;
+]]></ST>
+      </Implementation>
+    </Method>
+    <Method Name="CmdSecondStage" Id="{0211db0e-8916-5a2c-a61a-1b0f22f213ab}">
+      <Declaration><![CDATA[METHOD CmdSecondStage : E_CmdResult
+// ModeResume2 oder ModeSingleAxis2
+VAR_INPUT
+    eCmd : E_HmiCmd;
+    bHmiAlive : BOOL;
+    bFaultActive : BOOL;
+END_VAR
+VAR
+    eExpected : E_HmiCmd;
+    bOk : BOOL;
+END_VAR
+]]></Declaration>
+      <Implementation>
+        <ST><![CDATA[IF eMode <> E_OperatingMode.Pause THEN
+    CmdSecondStage := E_CmdResult.RejectedMode;
+    RETURN;
+END_IF
+IF eCmd = E_HmiCmd.ModeResume2 THEN
+    eExpected := E_HmiCmd.ModeResume1;
+ELSE
+    eExpected := E_HmiCmd.ModeSingleAxis1;
+END_IF
+bOk := eFirst = eExpected AND (TIME() - tFirst) <= GVL_Config.tTwoStepConfirmation;
+eFirst := E_HmiCmd.None;
+IF NOT bOk THEN
+    CmdSecondStage := E_CmdResult.RejectedSequence;
+    RETURN;
+END_IF
+IF eCmd = E_HmiCmd.ModeResume2 THEN
+    IF NOT bHmiAlive OR eG0 <> E_G0Step.S1_Betrieb OR bFaultActive THEN
+        CmdSecondStage := E_CmdResult.RejectedInterlock;
+        RETURN;
+    END_IF
+    eMode := E_OperatingMode.Automatic;
+ELSE
+    eMode := E_OperatingMode.SingleAxis;
+    bSingleReq := TRUE;
+END_IF
+CmdSecondStage := E_CmdResult.Accepted;
+]]></ST>
+      </Implementation>
+    </Method>
+    <Method Name="CmdReturnToBase" Id="{d37b7f1b-10e6-5318-b077-161d20c885c1}">
+      <Declaration><![CDATA[METHOD CmdReturnToBase : E_CmdResult
+VAR_INPUT
+    dwMissing : DWORD;      // dwBaseStateMissing
+END_VAR
+VAR_OUTPUT
+    nDetail : UDINT;
+END_VAR
+]]></Declaration>
+      <Implementation>
+        <ST><![CDATA[IF eMode <> E_OperatingMode.SingleAxis THEN
+    CmdReturnToBase := E_CmdResult.RejectedMode;
+    RETURN;
+END_IF
+IF (dwMissing AND 16#3F) <> 0 THEN
+    nDetail := DWORD_TO_UDINT(dwMissing AND 16#3F);
+    CmdReturnToBase := E_CmdResult.RejectedInterlock;
+    RETURN;
+END_IF
+eMode := E_OperatingMode.ReturnToBase;
+bInitReq := TRUE;
+CmdReturnToBase := E_CmdResult.Accepted;
+]]></ST>
+      </Implementation>
+    </Method>
+    <Method Name="Acknowledge" Id="{ec080e23-8220-5b7e-a29a-5703410e9eae}">
+      <Declaration><![CDATA[METHOD Acknowledge
+// Quittierung (AlarmAck): verlässt G0 Schritt 2, wenn Not-Halt entriegelt und Safety bereit.
+VAR_INPUT
+END_VAR
+]]></Declaration>
+      <Implementation>
+        <ST><![CDATA[bAckReq := TRUE;
+]]></ST>
+      </Implementation>
+    </Method>
+    <Method Name="ForcePause" Id="{642acac6-09ce-556a-b334-c67d86365da2}">
+      <Declaration><![CDATA[METHOD ForcePause
+VAR_INPUT
+END_VAR
+]]></Declaration>
+      <Implementation>
+        <ST><![CDATA[IF eMode = E_OperatingMode.Automatic OR eMode = E_OperatingMode.ReturnToBase THEN
+    eMode := E_OperatingMode.Pause;
+END_IF
+]]></ST>
+      </Implementation>
+    </Method>
+  </POU>
+</TcPlcObject>

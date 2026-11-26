@@ -1,0 +1,113 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<TcPlcObject Version="1.1.0.1">
+  <POU Name="FB_HmiStatus" Id="{9503fff9-08de-5af2-b85e-0727037647fe}" SpecialFunc="None">
+    <Declaration><![CDATA[// Füllt GVL_HMI.stStatus (stCmdAck und stParamActive pflegt FB_HmiCommand).
+FUNCTION_BLOCK FB_HmiStatus
+VAR_IN_OUT
+    fbMode : FB_ModeManager;
+    fbSeq : FB_BendSequence;
+END_VAR
+VAR_INPUT
+    bHmiAlive : BOOL;
+    bSimulation : BOOL;
+    dwBaseMissing : DWORD;
+END_VAR
+VAR
+    i : INT;
+END_VAR
+]]></Declaration>
+    <Implementation>
+      <ST><![CDATA[GVL_HMI.stStatus.nLifeCounter := GVL_HMI.stStatus.nLifeCounter + 1;
+GVL_HMI.stStatus.bHmiAlive := bHmiAlive;
+GVL_HMI.stStatus.bSimulation := bSimulation;
+GVL_HMI.stStatus.bEStopActive := GVL_IO.bEStopActive;
+GVL_HMI.stStatus.bSafetyOk := GVL_IO.bSafetyOk;
+GVL_HMI.stStatus.eMode := fbMode.eMode;
+GVL_HMI.stStatus.nStepG2 := TO_INT(fbSeq.eStepG2);
+GVL_HMI.stStatus.nStepG3 := TO_INT(fbSeq.eStepG3);
+GVL_HMI.stStatus.nBend := INT_TO_UDINT(MAX(0, fbSeq.nSection));
+GVL_HMI.stStatus.dwBaseStateMissing := dwBaseMissing;
+
+FOR i := 1 TO 5 DO
+    GVL_HMI.stStatus.aAxis[i].eState := GVL_Devices.aAxis[i].eState;
+    GVL_HMI.stStatus.aAxis[i].bEnabled := GVL_Devices.aAxis[i].bEnabled;
+    GVL_HMI.stStatus.aAxis[i].bReady := GVL_Devices.aAxis[i].bReady;
+    GVL_HMI.stStatus.aAxis[i].bError := GVL_Devices.aAxis[i].bError;
+    GVL_HMI.stStatus.aAxis[i].nErrorId := GVL_Devices.aAxis[i].nErrorId;
+    IF i = 5 THEN
+        GVL_HMI.stStatus.aAxis[i].fActPos := F_Mod360(GVL_Devices.aAxis[i].fActPos);
+        GVL_HMI.stStatus.aAxis[i].fSetPos := F_Mod360(GVL_Devices.aAxis[i].fSetPos);
+    ELSE
+        GVL_HMI.stStatus.aAxis[i].fActPos := GVL_Devices.aAxis[i].fActPos;
+        GVL_HMI.stStatus.aAxis[i].fSetPos := GVL_Devices.aAxis[i].fSetPos;
+    END_IF
+    GVL_HMI.stStatus.aAxis[i].fActVelo := GVL_Devices.aAxis[i].fActVelo;
+    GVL_HMI.stStatus.aAxis[i].fSetVelo := GVL_Devices.aAxis[i].fSetVelo;
+    GVL_HMI.stStatus.aAxis[i].fLagError := GVL_Devices.aAxis[i].fLag;
+    GVL_HMI.stStatus.aAxis[i].fTorque_Nm := GVL_IO.afTorque_Nm[i];
+END_FOR
+FOR i := 1 TO 6 DO
+    GVL_HMI.stStatus.aClamp[i].eState := GVL_Devices.aClamp[i].eState;
+    GVL_HMI.stStatus.aClamp[i].bValve := GVL_Devices.aClamp[i].bValve;
+    GVL_HMI.stStatus.aClamp[i].bOpen := GVL_IO.abClampOpen[i];
+    GVL_HMI.stStatus.aClamp[i].fLastSwitchTime_ms := GVL_Devices.aClamp[i].fLastSwitchTime_ms;
+END_FOR
+GVL_HMI.stStatus.stIo.bPressureOk := GVL_IO.bPressureOk;
+GVL_HMI.stStatus.stIo.abPanelIn := GVL_IO.abPanel;
+GVL_HMI.stStatus.stIo.abPanelOut := GVL_IO.abPanelLamp;
+GVL_HMI.stStatus.stKin := GVL_Devices.fbKin.GetStatus();
+]]></ST>
+    </Implementation>
+    <Method Name="CalcBaseMissing" Id="{37723ac1-57e2-5748-b7cd-baf50507b4d0}">
+      <Declaration><![CDATA[METHOD CalcBaseMissing : DWORD
+// Fehlende Grundzustandsbedingungen (Bits wie docs/hmi-schnittstelle.md).
+VAR_INPUT
+    bMaterialOk : BOOL;
+END_VAR
+VAR
+    dw : DWORD;
+    k : INT;
+    fPos : LREAL;
+    stKin : ST_KinStatus;
+END_VAR
+]]></Declaration>
+      <Implementation>
+        <ST><![CDATA[dw := 0;
+FOR k := 1 TO 5 DO
+    fPos := GVL_Devices.aAxis[k].fActPos;
+    IF k = 5 THEN
+        fPos := F_Mod360(fPos + 180.0) - 180.0;
+    END_IF
+    IF ABS(fPos) > GVL_Config.fPosTol THEN
+        dw := dw OR SHL(DWORD#1, k - 1);
+    END_IF
+END_FOR
+FOR k := 1 TO 6 DO
+    IF NOT GVL_Devices.aClamp[k].IsOpen() THEN
+        dw := dw OR 16#20;
+    END_IF
+END_FOR
+IF GVL_Devices.fbAlarm.FaultActive() THEN
+    dw := dw OR 16#40;
+END_IF
+FOR k := 1 TO 5 DO
+    IF GVL_Devices.aAxis[k].bError THEN
+        dw := dw OR 16#40;
+    END_IF
+END_FOR
+IF NOT GVL_IO.bSafetyOk THEN
+    dw := dw OR 16#80;
+END_IF
+stKin := GVL_Devices.fbKin.GetStatus();
+IF stKin.nPlanId = 0 OR NOT GVL_Plan.bValid THEN
+    dw := dw OR 16#100;
+END_IF
+IF NOT bMaterialOk THEN
+    dw := dw OR 16#200;
+END_IF
+CalcBaseMissing := dw;
+]]></ST>
+      </Implementation>
+    </Method>
+  </POU>
+</TcPlcObject>

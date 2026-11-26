@@ -1,0 +1,14 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<TcPlcObject Version="1.1.0.1">
+  <DUT Name="ST_FeedPoint" Id="{9edd77d3-96c3-5ce6-a1b6-20f749bfba40}">
+    <Declaration><![CDATA[// Ab Z1-Position fZ1_mm gilt der Vorschub fFeed_mm_s.
+{attribute 'pack_mode' := '1'}
+TYPE ST_FeedPoint :
+STRUCT
+    fZ1_mm : LREAL;
+    fFeed_mm_s : LREAL;
+END_STRUCT
+END_TYPE
+]]></Declaration>
+  </DUT>
+</TcPlcObject>

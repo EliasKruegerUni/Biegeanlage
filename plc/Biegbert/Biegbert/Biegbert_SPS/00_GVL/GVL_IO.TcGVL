@@ -1,0 +1,33 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<TcPlcObject Version="1.1.0.1">
+  <GVL Name="GVL_IO" Id="{faf96910-dbf1-5bbf-ba97-e8c55f441e46}">
+    <Declaration><![CDATA[// Prozessabbild und logische Signale. Nur 02_IO greift auf die AT-Variablen zu (architektur.md, Regel 5).
+// Die AT-Variablen im System Manager mit den Klemmen verknüpfen (docs/twincat-einrichtung.md).
+{attribute 'qualified_only'}
+VAR_GLOBAL
+    // ── Eingänge ──
+    abClampOpenIn    AT %I* : ARRAY[1..6] OF BOOL;   // EP1008 Kanal 1..6: SMT-8M Endlage OFFEN, NH1..NH6
+    bPressureOkIn    AT %I* : BOOL;                  // EP1008 Kanal 7: SDE5 Klemmdruck in Ordnung
+    bSafetyOkIn      AT %I* : BOOL;                  // TwinSAFE -> Standard-SPS: Sicherheitskreis geschlossen, STO aufgehoben
+    bEStopReleasedIn AT %I* : BOOL;                  // TwinSAFE -> Standard-SPS: Not-Halt entriegelt
+    abPanelIn        AT %I* : ARRAY[1..16] OF BOOL;  // ED1809, Belegung offen
+    anTorqueIn       AT %I* : ARRAY[1..5] OF INT;    // AX8000 Torque actual value (0x6077, 0,1 % Nennmoment), Index = E_Axis
+    // ── Ausgänge ──
+    abClampValveOut  AT %Q* : ARRAY[1..6] OF BOOL;   // EP2008 Kanal 1..6: Ventil NH1..NH6, TRUE = schließen
+    abPanelOut       AT %Q* : ARRAY[1..16] OF BOOL;  // ED2809, Belegung offen
+    bCameraTriggerOut AT %Q* : BOOL;                 // EL2252 Kanal 1 (später)
+
+    // ── logische Signale (FB_IoMap) ──
+    abClampOpen  : ARRAY[1..6] OF BOOL;
+    bPressureOk  : BOOL;
+    bSafetyOk    : BOOL;
+    bEStopActive : BOOL;
+    abPanel      : ARRAY[1..16] OF BOOL;
+    afTorque_Nm  : ARRAY[1..5] OF LREAL;
+    abClampValve : ARRAY[1..6] OF BOOL;
+    abPanelLamp  : ARRAY[1..16] OF BOOL;
+    bCameraTrigger : BOOL;
+END_VAR
+]]></Declaration>
+  </GVL>
+</TcPlcObject>

@@ -1,0 +1,23 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<TcPlcObject Version="1.1.0.1">
+  <DUT Name="E_G2Step" Id="{633a385a-804c-57ce-bfc3-0f319b9b43c8}">
+    <Declaration><![CDATA[// GRAFCET G2 Biegevorgang [Langfeld], Nummern = GRAFCET-Schritte.
+{attribute 'qualified_only'}
+{attribute 'strict'}
+{attribute 'to_string'}
+TYPE E_G2Step :
+(
+    S20_Grundzustand := 20,      // wartet auf Start
+    S21_Startposition := 21,     // Z2, X, A und Z1 auf Startposition des Abschnitts
+    S22_Niederhalter := 22,      // NH_soll schließen, Klemmung prüfen
+    S23_Biegen := 23,            // gekoppelt: Z1 Master, X und A aus Kurvenscheibe
+    S24_Halten := 24,            // Geometrie unter Last halten, warten auf Q1
+    S25_NhOeffnen := 25,         // alle Niederhalter öffnen, warten auf Q2
+    S26_Neutral := 26,           // entkoppeln, X und A auf 0
+    S27_Uebergabe := 27,         // n := n + 1; weiterer Abschnitt oder warten auf ENT / Fortsetzung
+    S28_Grundstellung := 28      // Z1, Z2, W auf 0
+) INT;
+END_TYPE
+]]></Declaration>
+  </DUT>
+</TcPlcObject>

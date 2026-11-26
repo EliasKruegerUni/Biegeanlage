@@ -1,0 +1,12 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<TcPlcObject Version="1.1.0.1">
+  <GVL Name="GVL_Plan" Id="{e3de924e-5bdb-5771-a4f4-c570fdb85676}">
+    <Declaration><![CDATA[// Geprüfte Kopie des aktiven Biegeplans. Schreibt nur FB_PlanStore, liest FB_BendKinematics und FB_BendSequence.
+{attribute 'qualified_only'}
+VAR_GLOBAL
+    stActive : ST_PlanTransfer;
+    bValid   : BOOL;
+END_VAR
+]]></Declaration>
+  </GVL>
+</TcPlcObject>

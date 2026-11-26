@@ -1,0 +1,85 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<TcPlcObject Version="1.1.0.1">
+  <POU Name="FB_Interlocks" Id="{c8167461-978f-5ace-a90f-92290ab4d4d8}" SpecialFunc="None">
+    <Declaration><![CDATA[// Zyklische Überwachung über mehrere Geräte: Abstand Futter <-> Führung, Futter in Niederhalterzone,
+// Software-Endlagen, Achs- und Niederhalterfehler, Not-Halt. Setzt und löscht die zugehörigen Alarme.
+FUNCTION_BLOCK FB_Interlocks
+VAR
+    i, p, k : INT;
+    fZ1, fZmax : LREAL;
+    bViolation : BOOL;
+    bOut : BOOL;
+END_VAR
+]]></Declaration>
+    <Implementation>
+      <ST><![CDATA[fZ1 := GVL_Devices.aAxis[1].fActPos;
+fZmax := F_Z1Max(GVL_Devices.aAxis[2].fActPos);
+
+// Abstand Futter <-> Führung (dZ12)
+IF fZ1 > fZmax + GVL_Config.fPosTol THEN
+    IF NOT GVL_Devices.fbAlarm.IsActive(E_AlarmCode.DistanceZ1Z2, 1, FALSE) THEN
+        StopZ1();
+        GVL_Devices.fbAlarm.Raise(E_AlarmCode.DistanceZ1Z2, E_AlarmSeverity.Stop, 1, 0);
+    END_IF
+ELSIF fZ1 < fZmax - 1.0 THEN
+    GVL_Devices.fbAlarm.Clear(E_AlarmCode.DistanceZ1Z2, 1, FALSE);
+END_IF
+
+// Futter in der Zone eines nicht offenen Niederhalters
+FOR p := 1 TO 3 DO
+    FOR k := 2 * p - 1 TO 2 * p DO
+        bViolation := F_ChuckInZone(p, fZ1)
+                      AND (GVL_Devices.aClamp[k].IsCommandedClosed() OR GVL_Devices.aClamp[k].eState = E_ClampState.Closing
+                           OR GVL_Devices.aClamp[k].eState = E_ClampState.Clamped);
+        IF bViolation AND NOT GVL_Devices.fbAlarm.IsActive(E_AlarmCode.ClampZoneViolation, k, FALSE) THEN
+            StopZ1();
+            GVL_Devices.fbAlarm.Raise(E_AlarmCode.ClampZoneViolation, E_AlarmSeverity.Fault, k, 0);
+        ELSIF NOT bViolation THEN
+            GVL_Devices.fbAlarm.Clear(E_AlarmCode.ClampZoneViolation, k, FALSE);
+        END_IF
+    END_FOR
+END_FOR
+
+// Achsen: Fehler und Software-Endlagen (W ist endlos)
+FOR i := 1 TO 5 DO
+    GVL_Devices.fbAlarm.Set(GVL_Devices.aAxis[i].bError, E_AlarmCode.AxisError, E_AlarmSeverity.Fault, i,
+                            GVL_Devices.aAxis[i].nErrorId);
+    IF i < 5 THEN
+        bOut := GVL_Devices.aAxis[i].fActPos > GVL_Config.aAxisMax[i] + GVL_Config.fPosTol
+             OR GVL_Devices.aAxis[i].fActPos < GVL_Config.aAxisMin[i] - GVL_Config.fPosTol;
+        IF bOut AND NOT GVL_Devices.fbAlarm.IsActive(E_AlarmCode.AxisSoftLimit, i, FALSE) THEN
+            IF GVL_Devices.aAxis[i].IsJogging() THEN
+                GVL_Devices.aAxis[i].StopJog();
+            END_IF
+        END_IF
+        GVL_Devices.fbAlarm.Set(bOut, E_AlarmCode.AxisSoftLimit, E_AlarmSeverity.Warning, i, 0);
+    END_IF
+END_FOR
+
+// Niederhalter
+FOR k := 1 TO 6 DO
+    GVL_Devices.fbAlarm.Set(GVL_Devices.aClamp[k].bTimeoutFault, E_AlarmCode.ClampTimeout, E_AlarmSeverity.Fault, k, 0);
+    GVL_Devices.fbAlarm.Set(GVL_Devices.aClamp[k].bPressureFault, E_AlarmCode.ClampPressureLow, E_AlarmSeverity.Fault, k, 0);
+END_FOR
+
+// Not-Halt und Safety
+GVL_Devices.fbAlarm.Set(GVL_IO.bEStopActive, E_AlarmCode.EStopActive, E_AlarmSeverity.Fault, 0, 0);
+GVL_Devices.fbAlarm.Set(NOT GVL_IO.bSafetyOk, E_AlarmCode.SafetyNotReady, E_AlarmSeverity.Fault, 0, 0);
+]]></ST>
+    </Implementation>
+    <Method Name="StopZ1" Id="{17ff20eb-56f7-5f27-9c94-64ace7e3b491}">
+      <Declaration><![CDATA[METHOD PRIVATE StopZ1
+VAR_INPUT
+END_VAR
+]]></Declaration>
+      <Implementation>
+        <ST><![CDATA[IF GVL_Devices.fbKin.IsCoupled() THEN
+    GVL_Devices.fbKin.Hold();
+ELSE
+    GVL_Devices.aAxis[1].Halt();
+END_IF
+]]></ST>
+      </Implementation>
+    </Method>
+  </POU>
+</TcPlcObject>

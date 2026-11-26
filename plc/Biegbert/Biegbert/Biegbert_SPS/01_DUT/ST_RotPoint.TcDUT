@@ -1,0 +1,14 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<TcPlcObject Version="1.1.0.1">
+  <DUT Name="ST_RotPoint" Id="{cedeae5a-8962-5b46-9cbe-6c9a01fa1777}">
+    <Declaration><![CDATA[// Rotation von W um fW_deg (relativ), wenn Z1 fZ1_mm erreicht.
+{attribute 'pack_mode' := '1'}
+TYPE ST_RotPoint :
+STRUCT
+    fZ1_mm : LREAL;
+    fW_deg : LREAL;
+END_STRUCT
+END_TYPE
+]]></Declaration>
+  </DUT>
+</TcPlcObject>
